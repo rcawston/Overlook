@@ -115,7 +115,13 @@ struct ContentView: View {
                 VideoSurfaceView(
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
-                    isShowingOCRResult: $isShowingOCRResult
+                    isShowingOCRResult: $isShowingOCRResult,
+                    onReconnect: {
+                        guard let device = kvmDeviceManager.connectedDevice else { return }
+                        Task { @MainActor in
+                            await webRTCManager.reconnect(to: device)
+                        }
+                    }
                 )
                 .ignoresSafeArea()
                 .allowsHitTesting(!showingSettings)
@@ -123,7 +129,13 @@ struct ContentView: View {
                 VideoSurfaceView(
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
-                    isShowingOCRResult: $isShowingOCRResult
+                    isShowingOCRResult: $isShowingOCRResult,
+                    onReconnect: {
+                        guard let device = kvmDeviceManager.connectedDevice else { return }
+                        Task { @MainActor in
+                            await webRTCManager.reconnect(to: device)
+                        }
+                    }
                 )
                 .allowsHitTesting(!showingSettings)
             }

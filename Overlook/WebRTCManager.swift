@@ -78,6 +78,11 @@ class WebRTCManager: NSObject, ObservableObject {
     @Published var iceCurrentRoundTripTimeMs: Int?
     @Published var audioEnabled = false
     @Published var micEnabled = false
+    @Published var isConnecting = false
+    @Published var hasEverConnectedToStream = false
+    @Published var isStreamStalled = false
+    @Published var lastDisconnectReason: String?
+    @Published var lastVideoFrameAgeSeconds: Int?
     
     private var peerConnection: RTCPeerConnection?
     private var videoTrack: RTCVideoTrack?
@@ -94,6 +99,14 @@ class WebRTCManager: NSObject, ObservableObject {
     private var fpsWindowStartTime: CFTimeInterval = 0
     private var fpsFrameCount: Int = 0
     private var lastFpsPublishTime: CFTimeInterval = 0
+
+    private let streamHealthLock = NSLock()
+    private var lastVideoFrameTime: CFTimeInterval?
+    private var connectedIceTime: CFTimeInterval?
+    private var streamHealthTimer: Timer?
+
+    private let streamStallThresholdSeconds: CFTimeInterval = 3.0
+    private let initialFrameTimeoutSeconds: CFTimeInterval = 5.0
     
     private let allowInsecureTLS = true
     private var signalingSession: URLSession?
@@ -131,43 +144,71 @@ class WebRTCManager: NSObject, ObservableObject {
             throw WebRTCError.factoryNotInitialized
         }
 
-        if videoView == nil {
-            videoView = RTCMTLNSVideoView(frame: .zero)
-        }
-        
-        // Create peer connection
-        let configuration = RTCConfiguration()
-        configuration.iceServers = [
-            RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
-        ]
-        configuration.sdpSemantics = .unifiedPlan
-        
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: nil,
-            optionalConstraints: ["OfferToReceiveVideo": "true"]
-        )
-        
-        peerConnection = factory.peerConnection(
-            with: configuration,
-            constraints: constraints,
-            delegate: self
-        )
+        isConnecting = true
+        isStreamStalled = false
+        lastDisconnectReason = nil
+        lastVideoFrameAgeSeconds = nil
+        streamHealthLock.lock()
+        lastVideoFrameTime = nil
+        streamHealthLock.unlock()
+        connectedIceTime = nil
+        hasEverConnectedToStream = false
 
-        if micEnabled {
-            let granted = await ensureMicrophoneAccess()
-            if granted {
-                setupLocalMicrophoneTrackIfNeeded(factory: factory)
+        do {
+            if videoView == nil {
+                videoView = RTCMTLNSVideoView(frame: .zero)
             }
+            
+            // Create peer connection
+            let configuration = RTCConfiguration()
+            configuration.iceServers = [
+                RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
+            ]
+            configuration.sdpSemantics = .unifiedPlan
+            
+            let constraints = RTCMediaConstraints(
+                mandatoryConstraints: nil,
+                optionalConstraints: ["OfferToReceiveVideo": "true"]
+            )
+            
+            peerConnection = factory.peerConnection(
+                with: configuration,
+                constraints: constraints,
+                delegate: self
+            )
+
+            if micEnabled {
+                let granted = await ensureMicrophoneAccess()
+                if granted {
+                    setupLocalMicrophoneTrackIfNeeded(factory: factory)
+                }
+            }
+            
+            // Setup data channel for input events
+            setupDataChannel()
+            
+            // Connect to signaling server
+            try await connectToSignalingServer(device: device)
+            
+            // Start connection quality monitoring
+            startLatencyMonitoring()
+            startStreamHealthMonitoring()
+        } catch {
+            let reason = "Connect failed: \(String(describing: error))"
+            disconnect()
+            lastDisconnectReason = reason
+            throw error
         }
-        
-        // Setup data channel for input events
-        setupDataChannel()
-        
-        // Connect to signaling server
-        try await connectToSignalingServer(device: device)
-        
-        // Start connection quality monitoring
-        startLatencyMonitoring()
+    }
+
+    func reconnect(to device: KVMDevice) async {
+        disconnect()
+        do {
+            try await connect(to: device)
+        } catch {
+            isConnecting = false
+            lastDisconnectReason = "Reconnect failed: \(String(describing: error))"
+        }
     }
 
     func setFrameCaptureEnabled(_ enabled: Bool) {
@@ -371,6 +412,10 @@ class WebRTCManager: NSObject, ObservableObject {
                 await handleSignalingMessage(message)
             } catch {
                 print("WebSocket receive error: \(error)")
+                isConnecting = false
+                if isConnected || hasEverConnectedToStream || lastDisconnectReason == nil {
+                    lastDisconnectReason = "Signaling connection lost"
+                }
                 break
             }
         }
@@ -522,6 +567,62 @@ class WebRTCManager: NSObject, ObservableObject {
             Task {
                 await self.measureLatency()
                 await self.measureStreamStats()
+            }
+        }
+    }
+
+    private func startStreamHealthMonitoring() {
+        streamHealthTimer?.invalidate()
+        streamHealthTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+
+            let now = CACurrentMediaTime()
+
+            if self.isConnected == false {
+                self.isStreamStalled = false
+                self.lastVideoFrameAgeSeconds = nil
+                return
+            }
+
+            let lastFrame: CFTimeInterval?
+            self.streamHealthLock.lock()
+            lastFrame = self.lastVideoFrameTime
+            self.streamHealthLock.unlock()
+
+            let age: CFTimeInterval?
+            if let lastFrame {
+                age = now - lastFrame
+            } else {
+                age = nil
+            }
+
+            if let age {
+                self.lastVideoFrameAgeSeconds = max(0, Int(age.rounded()))
+            } else {
+                self.lastVideoFrameAgeSeconds = nil
+            }
+
+            if let age, age > self.streamStallThresholdSeconds {
+                if self.isStreamStalled == false {
+                    self.isStreamStalled = true
+                    self.lastDisconnectReason = "Video stream stalled"
+                }
+                return
+            }
+
+            if self.lastVideoFrameTime == nil,
+               let connectedAt = self.connectedIceTime,
+               now - connectedAt > self.initialFrameTimeoutSeconds {
+                if self.isStreamStalled == false {
+                    self.isStreamStalled = true
+                    self.lastDisconnectReason = "Video stream stalled"
+                }
+                return
+            }
+
+            if self.isStreamStalled {
+                self.isStreamStalled = false
+                self.lastDisconnectReason = nil
             }
         }
     }
@@ -699,11 +800,18 @@ class WebRTCManager: NSObject, ObservableObject {
         connectionTimer?.invalidate()
         connectionTimer = nil
 
+        streamHealthTimer?.invalidate()
+        streamHealthTimer = nil
+
         janusKeepAliveTimer?.invalidate()
         janusKeepAliveTimer = nil
         janusSessionId = nil
         janusHandleId = nil
+        let waiters = janusWaiters
         janusWaiters.removeAll()
+        for (_, waiter) in waiters {
+            waiter.resume(throwing: WebRTCError.signalingConnectionLost)
+        }
         
         webSocketTask?.cancel()
         webSocketTask = nil
@@ -719,6 +827,15 @@ class WebRTCManager: NSObject, ObservableObject {
         
         videoView = nil
         isConnected = false
+        isConnecting = false
+        hasEverConnectedToStream = false
+        isStreamStalled = false
+        lastDisconnectReason = nil
+        lastVideoFrameAgeSeconds = nil
+        streamHealthLock.lock()
+        lastVideoFrameTime = nil
+        streamHealthLock.unlock()
+        connectedIceTime = nil
         latency = 0
         videoSize = nil
         isFrameCaptureEnabled = false
@@ -795,6 +912,23 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCIceConnectionState) {
         Task { @MainActor in
             isConnected = (stateChanged == .connected || stateChanged == .completed)
+            if isConnected {
+                isConnecting = false
+                hasEverConnectedToStream = true
+                connectedIceTime = CACurrentMediaTime()
+                lastDisconnectReason = nil
+            } else {
+                if stateChanged == .disconnected {
+                    lastDisconnectReason = "Video connection lost"
+                    isConnecting = false
+                } else if stateChanged == .failed {
+                    lastDisconnectReason = "Video connection failed"
+                    isConnecting = false
+                } else if stateChanged == .closed {
+                    lastDisconnectReason = "Video connection closed"
+                    isConnecting = false
+                }
+            }
             print("ICE connection state changed: \(stateChanged)")
         }
     }
@@ -886,6 +1020,11 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
         guard let frame else { return }
 
         let now = CACurrentMediaTime()
+
+        streamHealthLock.lock()
+        lastVideoFrameTime = now
+        streamHealthLock.unlock()
+
         if fpsWindowStartTime == 0 {
             fpsWindowStartTime = now
             lastFpsPublishTime = now
@@ -949,6 +1088,11 @@ struct InputMessage: Codable {
 @MainActor
 final class WebRTCManager: NSObject, ObservableObject {
     @Published var isConnected = false
+    @Published var isConnecting = false
+    @Published var hasEverConnectedToStream = false
+    @Published var isStreamStalled = false
+    @Published var lastDisconnectReason: String?
+    @Published var lastVideoFrameAgeSeconds: Int?
     @Published var latency: Int = 0
     @Published var currentFrame: CVPixelBuffer?
     @Published var audioEnabled = false
@@ -957,12 +1101,21 @@ final class WebRTCManager: NSObject, ObservableObject {
     func connect(to device: KVMDevice) async throws {
         isConnected = false
     }
+
+    func reconnect(to device: KVMDevice) async {
+        disconnect()
+    }
     
     func sendInputEvent(_ event: InputEvent) {
     }
     
     func disconnect() {
         isConnected = false
+        isConnecting = false
+        hasEverConnectedToStream = false
+        isStreamStalled = false
+        lastDisconnectReason = nil
+        lastVideoFrameAgeSeconds = nil
         latency = 0
         currentFrame = nil
     }
