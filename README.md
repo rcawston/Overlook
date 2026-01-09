@@ -2,6 +2,8 @@
 
 Overlook is a macOS-native remote console for GL.iNet GLKVM / Comet-style KVM devices.
 
+![Overlook Screenshot](./OverlookScreenshot.png)
+
 It focuses on *fast*, *low-friction* day-to-day “reach over and fix it” workflows:
 
 - Low-latency WebRTC video streaming (Janus signaling).
