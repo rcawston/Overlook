@@ -10,6 +10,9 @@ struct WebUISettingsPanel: View {
 
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
 
+    @AppStorage("overlook.audio.inputDeviceUID") private var audioInputDeviceUID: String = ""
+    @AppStorage("overlook.audio.outputDeviceUID") private var audioOutputDeviceUID: String = ""
+
     @State private var config: GLKVMSystemConfig?
     @State private var keymaps: GLKVMHidKeymapsState?
     @State private var streamerState: GLKVMStreamerState?
@@ -54,6 +57,9 @@ struct WebUISettingsPanel: View {
     @State private var streamerH264Gop: Int = 30
     @State private var streamerZeroDelay: Bool = false
     @State private var streamerResolution: String = ""
+
+    @State private var audioInputDevices: [CoreAudioDeviceInfo] = []
+    @State private var audioOutputDevices: [CoreAudioDeviceInfo] = []
 
     @State private var streamerDesiredFpsText: String = ""
     @State private var streamerQualityText: String = ""
@@ -584,6 +590,28 @@ struct WebUISettingsPanel: View {
                             Toggle("Audio", isOn: $webRTCManager.audioEnabled)
                             Toggle("Microphone", isOn: $webRTCManager.micEnabled)
 
+                            Picker("Microphone device", selection: $audioInputDeviceUID) {
+                                Text("System Default").tag("")
+                                if !audioInputDeviceUID.isEmpty,
+                                   audioInputDevices.contains(where: { $0.uid == audioInputDeviceUID }) == false {
+                                    Text("Unavailable").tag(audioInputDeviceUID)
+                                }
+                                ForEach(audioInputDevices, id: \.uid) { device in
+                                    Text(device.name).tag(device.uid)
+                                }
+                            }
+
+                            Picker("Output device", selection: $audioOutputDeviceUID) {
+                                Text("System Default").tag("")
+                                if !audioOutputDeviceUID.isEmpty,
+                                   audioOutputDevices.contains(where: { $0.uid == audioOutputDeviceUID }) == false {
+                                    Text("Unavailable").tag(audioOutputDeviceUID)
+                                }
+                                ForEach(audioOutputDevices, id: \.uid) { device in
+                                    Text(device.name).tag(device.uid)
+                                }
+                            }
+
                             Text("Reconnect required")
                                 .foregroundColor(.secondary)
                                 .font(.caption)
@@ -594,6 +622,8 @@ struct WebUISettingsPanel: View {
                             .disabled(kvmDeviceManager.connectedDevice == nil)
                         }
                         .padding(.top, 6)
+                        .onAppear { refreshAudioDevices() }
+                        .onChange(of: isAudioExpanded) { _, _ in refreshAudioDevices() }
                     }
 
                     DisclosureGroup("System", isExpanded: $isSystemExpanded) {
@@ -1090,6 +1120,12 @@ struct WebUISettingsPanel: View {
         if value < min { return min }
         if value > max { return max }
         return value
+    }
+
+    @MainActor
+    private func refreshAudioDevices() {
+        audioInputDevices = CoreAudioDevices.listInputDevices()
+        audioOutputDevices = CoreAudioDevices.listOutputDevices()
     }
 
     @MainActor

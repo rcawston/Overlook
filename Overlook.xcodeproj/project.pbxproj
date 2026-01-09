@@ -27,6 +27,9 @@
 		0100001A /* ContentControlBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000019 /* ContentControlBar.swift */; };
 		0100001B /* VideoSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001A /* VideoSurfaceView.swift */; };
 		0100001C /* StatusBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001B /* StatusBarView.swift */; };
+		0100001D /* CoreAudioDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001C /* CoreAudioDevices.swift */; };
+		0100001E /* WebRTCAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001D /* WebRTCAudioDevice.swift */; };
+		0100001F /* WebRTCFactoryBuilder.m in Sources */ = {isa = PBXBuildFile; fileRef = 02000021 /* WebRTCFactoryBuilder.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +53,12 @@
 		02000019 /* ContentControlBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentControlBar.swift; sourceTree = "<group>"; };
 		0200001A /* VideoSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoSurfaceView.swift; sourceTree = "<group>"; };
 		0200001B /* StatusBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarView.swift; sourceTree = "<group>"; };
+		0200001C /* CoreAudioDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAudioDevices.swift; sourceTree = "<group>"; };
+		0200001D /* WebRTCAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCAudioDevice.swift; sourceTree = "<group>"; };
+		0200001E /* RTCAudioDeviceShim.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RTCAudioDeviceShim.h; sourceTree = "<group>"; };
+		0200001F /* Overlook-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Overlook-Bridging-Header.h"; sourceTree = "<group>"; };
+		02000020 /* WebRTCFactoryBuilder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WebRTCFactoryBuilder.h; sourceTree = "<group>"; };
+		02000021 /* WebRTCFactoryBuilder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WebRTCFactoryBuilder.m; sourceTree = "<group>"; };
 		03000001 /* Overlook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Overlook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -86,6 +95,12 @@
 				02000016 /* WebUISettingsPanel.swift */,
 				02000015 /* GLKVMClient.swift */,
 				02000006 /* WebRTCManager.swift */,
+				0200001C /* CoreAudioDevices.swift */,
+				0200001D /* WebRTCAudioDevice.swift */,
+				02000021 /* WebRTCFactoryBuilder.m */,
+				02000020 /* WebRTCFactoryBuilder.h */,
+				0200001E /* RTCAudioDeviceShim.h */,
+				0200001F /* Overlook-Bridging-Header.h */,
 				02000007 /* InputManager.swift */,
 				02000008 /* OCRManager.swift */,
 				02000009 /* KVMDeviceManager.swift */,
@@ -194,6 +209,9 @@
 				01000019 /* ConnectSheets.swift in Sources */,
 				01000015 /* GLKVMClient.swift in Sources */,
 				01000006 /* WebRTCManager.swift in Sources */,
+				0100001D /* CoreAudioDevices.swift in Sources */,
+				0100001E /* WebRTCAudioDevice.swift in Sources */,
+				0100001F /* WebRTCFactoryBuilder.m in Sources */,
 				01000007 /* InputManager.swift in Sources */,
 				01000008 /* OCRManager.swift in Sources */,
 				01000009 /* KVMDeviceManager.swift in Sources */,
@@ -359,6 +377,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.overlook.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = Overlook/Overlook-Bridging-Header.h;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -393,6 +412,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.overlook.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = Overlook/Overlook-Bridging-Header.h;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
