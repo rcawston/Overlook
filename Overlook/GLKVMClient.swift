@@ -68,6 +68,28 @@ struct GLKVMSystemConfig: Codable, Hashable {
         case fingerbotStrength = "fingerbot_strength"
         case videoProcessing = "video_processing"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        shortcuts = (try? container.decode([GLKVMSystemConfigShortcut].self, forKey: .shortcuts)) ?? []
+        orientation = (try? container.decode(Int.self, forKey: .orientation)) ?? 0
+        streamQuality = (try? container.decode(Int.self, forKey: .streamQuality)) ?? 1
+        videoMode = (try? container.decode(String.self, forKey: .videoMode)) ?? ""
+        showCursor = (try? container.decode(Bool.self, forKey: .showCursor)) ?? true
+        mousePolling = (try? container.decode(Int.self, forKey: .mousePolling)) ?? 10
+        mouseControl = (try? container.decode(Bool.self, forKey: .mouseControl)) ?? true
+        relativeSense = (try? container.decode(Int.self, forKey: .relativeSense)) ?? 10
+        scrollRate = (try? container.decode(Int.self, forKey: .scrollRate)) ?? 5
+        reverseScrolling = (try? container.decode(String.self, forKey: .reverseScrolling)) ?? "STANDARD"
+        keyboardControl = (try? container.decode(Bool.self, forKey: .keyboardControl)) ?? true
+        themeMode = (try? container.decode(String.self, forKey: .themeMode)) ?? "auto"
+        mouseJiggle = (try? container.decode(Bool.self, forKey: .mouseJiggle)) ?? false
+        keymap = (try? container.decode(String.self, forKey: .keymap)) ?? "en-us"
+        gotMutedPanelTip = (try? container.decode(Bool.self, forKey: .gotMutedPanelTip)) ?? false
+        isAbsoluteMouse = (try? container.decode(Bool.self, forKey: .isAbsoluteMouse)) ?? true
+        fingerbotStrength = (try? container.decode(Int.self, forKey: .fingerbotStrength)) ?? 0
+        videoProcessing = (try? container.decode(String.self, forKey: .videoProcessing)) ?? ""
+    }
 }
 
 struct GLKVMTurnCredentials: Decodable {
@@ -194,7 +216,18 @@ struct GLKVMWebSocketSend: Encodable {
 }
 
 struct GLKVMAuthLoginResult: Decodable {
-    let token: String
+    let token: String?
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case authToken = "auth_token"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        token = try container.decodeIfPresent(String.self, forKey: .token)
+            ?? container.decodeIfPresent(String.self, forKey: .authToken)
+    }
 }
 
 final class GLKVMClient {
@@ -234,7 +267,8 @@ final class GLKVMClient {
     private let session: URLSession
 
     init(host: String, port: Int = 443, authToken: String? = nil, allowInsecureTLS: Bool = true) throws {
-        guard let url = URL(string: "https://\(host):\(port)") else {
+        let scheme = Self.defaultHTTPScheme(for: port)
+        guard let url = URL(string: "\(scheme)://\(host):\(port)") else {
             throw ClientError.invalidBaseURL
         }
 
@@ -246,6 +280,19 @@ final class GLKVMClient {
         config.timeoutIntervalForResource = 30
 
         self.session = URLSession(configuration: config, delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS), delegateQueue: nil)
+    }
+
+    static func defaultHTTPScheme(for port: Int) -> String {
+        switch port {
+        case 80, 8080:
+            return "http"
+        default:
+            return "https"
+        }
+    }
+
+    static func defaultWebSocketScheme(for port: Int) -> String {
+        defaultHTTPScheme(for: port) == "https" ? "wss" : "ws"
     }
 
     convenience init(device: KVMDevice, allowInsecureTLS: Bool = true) throws {
@@ -314,6 +361,8 @@ final class GLKVMClient {
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
+            let preview = String(data: data.prefix(512), encoding: .utf8) ?? "<binary \(data.count)B>"
+            NSLog("[Overlook glkvm] decode failed for %@ (status=%d): %@ | body: %@", url.absoluteString, http.statusCode, "\(error)", preview)
             throw ClientError.decodingFailed
         }
     }
@@ -348,15 +397,39 @@ final class GLKVMClient {
         body.append("\(password)\r\n".data(using: .utf8) ?? Data())
         body.append("--\(boundary)--\r\n".data(using: .utf8) ?? Data())
 
-        let response = try await request(
-            method: "POST",
-            path: "api/auth/login",
-            body: body,
-            contentType: "multipart/form-data; boundary=\(boundary)",
-            responseType: GLKVMResponse<GLKVMAuthLoginResult>.self
-        )
+        let url = try makeURL(path: "api/auth/login")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
-        return response.result.token
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ClientError.decodingFailed
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            let bodyString = String(data: data, encoding: .utf8)
+            throw ClientError.httpError(statusCode: http.statusCode, body: bodyString)
+        }
+
+        if let wrapped = try? JSONDecoder().decode(GLKVMResponse<GLKVMAuthLoginResult>.self, from: data) {
+            if let token = wrapped.result.token, !token.isEmpty {
+                return token
+            }
+            if wrapped.ok == false {
+                let bodyString = String(data: data, encoding: .utf8)
+                throw ClientError.httpError(statusCode: http.statusCode, body: bodyString)
+            }
+        }
+
+        if let token = authTokenFromSetCookieHeaders(in: http, for: url) {
+            return token
+        }
+
+        let preview = String(data: data.prefix(512), encoding: .utf8) ?? "<binary \(data.count)B>"
+        NSLog("[Overlook glkvm] login succeeded but no auth token was found. body: %@", preview)
+        throw ClientError.decodingFailed
     }
 
     func getSystemConfig() async throws -> GLKVMSystemConfig {
@@ -431,7 +504,7 @@ final class GLKVMClient {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw ClientError.invalidURL
         }
-        components.scheme = "wss"
+        components.scheme = baseURL.scheme == "http" ? "ws" : "wss"
         components.path = "/api/ws"
         guard let url = components.url else {
             throw ClientError.invalidURL
@@ -443,13 +516,25 @@ final class GLKVMClient {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw ClientError.invalidURL
         }
-        components.scheme = "wss"
+        components.scheme = baseURL.scheme == "http" ? "ws" : "wss"
         components.path = "/api/media/ws"
         guard let url = components.url else {
             throw ClientError.invalidURL
         }
         return url
     }
+}
+
+private func authTokenFromSetCookieHeaders(in response: HTTPURLResponse, for url: URL) -> String? {
+    var headerFields: [String: String] = [:]
+    for (key, value) in response.allHeaderFields {
+        headerFields[String(describing: key)] = String(describing: value)
+    }
+
+    return HTTPCookie
+        .cookies(withResponseHeaderFields: headerFields, for: url)
+        .first(where: { $0.name == "auth_token" })?
+        .value
 }
 
 extension GLKVMClient.ClientError: CustomStringConvertible {

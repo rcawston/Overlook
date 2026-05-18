@@ -445,7 +445,7 @@ class WebRTCManager: NSObject, ObservableObject {
         if !device.authToken.isEmpty {
             request.setValue("auth_token=\(device.authToken)", forHTTPHeaderField: "Cookie")
         }
-        request.setValue("https://\(device.host):\(device.port)", forHTTPHeaderField: "Origin")
+        request.setValue(device.originURL, forHTTPHeaderField: "Origin")
         request.setValue("janus-protocol", forHTTPHeaderField: "Sec-WebSocket-Protocol")
 
         webSocketTask = session.webSocketTask(with: request)

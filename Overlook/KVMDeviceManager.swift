@@ -814,9 +814,21 @@ struct KVMDevice: Identifiable, Codable {
     var connectionString: String {
         return "\(host):\(port)"
     }
+
+    var httpScheme: String {
+        GLKVMClient.defaultHTTPScheme(for: port)
+    }
+
+    var webSocketScheme: String {
+        GLKVMClient.defaultWebSocketScheme(for: port)
+    }
+
+    var originURL: String {
+        return "\(httpScheme)://\(host):\(port)"
+    }
     
     var webRTCURL: String {
-        return "wss://\(host):\(port)/janus/ws"
+        return "\(webSocketScheme)://\(host):\(port)/janus/ws"
     }
 }
 

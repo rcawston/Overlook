@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var showingPasswordPrompt = false
     @State private var pendingPasswordDevice: KVMDevice?
     @State private var pendingPassword = ""
+    @State private var connectionErrorMessage: String?
 
     @State private var suppressDeviceAutoConnect = false
 
@@ -364,6 +365,19 @@ struct ContentView: View {
                 }
             )
         }
+        .alert(
+            "Connection Failed",
+            isPresented: Binding(
+                get: { connectionErrorMessage != nil },
+                set: { if !$0 { connectionErrorMessage = nil } }
+            )
+        ) {
+            Button("OK") {
+                connectionErrorMessage = nil
+            }
+        } message: {
+            Text(connectionErrorMessage ?? "")
+        }
         .toolbar {
             if isFullscreen == false {
                 ToolbarItemGroup(placement: .automatic) {
@@ -433,6 +447,7 @@ struct ContentView: View {
                     print("Failed to connect: \(error)")
                     await MainActor.run {
                         isConnected = false
+                        connectionErrorMessage = describeConnectionError(error)
                     }
                 }
                 return
@@ -471,6 +486,13 @@ struct ContentView: View {
 
         let password = manualPassword.trimmingCharacters(in: .whitespacesAndNewlines)
         connectToDevice(device, password: password.isEmpty ? nil : password)
+    }
+
+    private func describeConnectionError(_ error: Error) -> String {
+        if let describable = error as? CustomStringConvertible {
+            return describable.description
+        }
+        return error.localizedDescription
     }
 
     private func toggleConnection() {
