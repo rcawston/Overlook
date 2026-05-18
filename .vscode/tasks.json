@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-overlook-debug",
+      "type": "shell",
+      "command": "${workspaceFolder}/build.sh",
+      "args": ["-c", "debug"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}

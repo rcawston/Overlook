@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Overlook",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/debug/Overlook.app/Contents/MacOS/Overlook",
+      "cwd": "${workspaceFolder}",
+      "terminal": "console",
+      "preLaunchTask": "build-overlook-debug",
+      "stopOnEntry": false
+    },
+    {
+      "name": "Attach to Overlook",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/build/debug/Overlook.app/Contents/MacOS/Overlook",
+      "waitFor": true
+    }
+  ]
+}
