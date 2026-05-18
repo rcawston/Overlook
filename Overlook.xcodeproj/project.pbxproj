@@ -17,7 +17,6 @@
 		01000010 /* MenuBarAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000010 /* MenuBarAgent.swift */; };
 		01000011 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000011 /* JSONValue.swift */; };
 		01000012 /* HardwareControlManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000012 /* HardwareControlManager.swift */; };
-		01000013 /* PluginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000013 /* PluginManager.swift */; };
 		01000014 /* TailscaleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000014 /* TailscaleManager.swift */; };
 		01000015 /* GLKVMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000015 /* GLKVMClient.swift */; };
 		01000016 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 14000001 /* WebRTC */; };
@@ -44,7 +43,6 @@
 		02000010 /* MenuBarAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarAgent.swift; sourceTree = "<group>"; };
 		02000011 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		02000012 /* HardwareControlManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareControlManager.swift; sourceTree = "<group>"; };
-		02000013 /* PluginManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginManager.swift; sourceTree = "<group>"; };
 		02000014 /* TailscaleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleManager.swift; sourceTree = "<group>"; };
 		02000015 /* GLKVMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GLKVMClient.swift; sourceTree = "<group>"; };
 		02000016 /* WebUISettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebUISettingsPanel.swift; sourceTree = "<group>"; };
@@ -106,7 +104,6 @@
 				02000009 /* KVMDeviceManager.swift */,
 				02000012 /* HardwareControlManager.swift */,
 				02000010 /* MenuBarAgent.swift */,
-				02000013 /* PluginManager.swift */,
 				02000014 /* TailscaleManager.swift */,
 				02000011 /* JSONValue.swift */,
 				02000003 /* Assets.xcassets */,
@@ -217,7 +214,6 @@
 				01000009 /* KVMDeviceManager.swift in Sources */,
 				01000012 /* HardwareControlManager.swift in Sources */,
 				01000010 /* MenuBarAgent.swift in Sources */,
-				01000013 /* PluginManager.swift in Sources */,
 				01000014 /* TailscaleManager.swift in Sources */,
 				01000011 /* JSONValue.swift in Sources */,
 			);
