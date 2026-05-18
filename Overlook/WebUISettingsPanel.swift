@@ -876,6 +876,7 @@ struct WebUISettingsPanel: View {
             let edidValue = try await client.getEDID()
             await MainActor.run {
                 self.config = config
+                inputManager.setGLKVMAbsoluteMouseMode(config.isAbsoluteMouse)
                 webRTCManager.setPreferLowLatencyPlayout(config.videoProcessing == "low_latency_first")
                 self.keymaps = km
                 self.streamerState = st
@@ -1170,6 +1171,7 @@ struct WebUISettingsPanel: View {
             let updated = try await client.setSystemConfig(config)
             await MainActor.run {
                 self.config = updated
+                inputManager.setGLKVMAbsoluteMouseMode(updated.isAbsoluteMouse)
                 isApplying = false
             }
         } catch {

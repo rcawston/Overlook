@@ -16,13 +16,20 @@ class InputManager: ObservableObject {
     private var keyEventMonitor: Any?
     private var mouseEventMonitor: Any?
     private var isCapturing = false
+    private var mouseModeRefreshTask: Task<Void, Never>?
 
     private struct PendingAbsoluteMouseMove {
         let toX: Int
         let toY: Int
     }
 
-    private var pendingMouseMove: PendingAbsoluteMouseMove?
+    private struct PendingRelativeMouseMove {
+        var deltaX: Int
+        var deltaY: Int
+    }
+
+    private var pendingAbsoluteMouseMove: PendingAbsoluteMouseMove?
+    private var pendingRelativeMouseMove: PendingRelativeMouseMove?
     private var mouseMoveSenderTask: Task<Void, Never>?
     private static let mouseMoveSendIntervalNs: UInt64 = 8_333_333
 
@@ -40,13 +47,19 @@ class InputManager: ObservableObject {
     }
 
     @Published var transportMode: TransportMode = .glkvmWebSocket
+    @Published private(set) var isGLKVMAbsoluteMouseMode = true
     
     func setup(with webRTCManager: WebRTCManager) {
         self.webRTCManager = webRTCManager
     }
 
     func setGLKVMClient(_ client: GLKVMClient?) {
+        mouseModeRefreshTask?.cancel()
+        mouseModeRefreshTask = nil
         glkvmClient = client
+        isGLKVMAbsoluteMouseMode = true
+        pendingAbsoluteMouseMove = nil
+        pendingRelativeMouseMove = nil
         if client == nil {
             disconnectGLKVMWebSocket()
             return
@@ -54,23 +67,64 @@ class InputManager: ObservableObject {
         Task { [weak self] in
             await self?.reconnectGLKVMWebSocketIfNeeded()
         }
+        mouseModeRefreshTask = Task { [weak self, weak client] in
+            guard let client else { return }
+            do {
+                let config = try await client.getSystemConfig()
+                await MainActor.run {
+                    guard let self, self.glkvmClient === client else { return }
+                    self.setGLKVMAbsoluteMouseMode(config.isAbsoluteMouse)
+                }
+            } catch {
+                // Keep the default absolute-mode behavior if settings cannot be loaded.
+            }
+        }
     }
 
-    func handleVideoMouseMove(pointInView: CGPoint, viewSize: CGSize, videoSize: CGSize?) {
+    func setGLKVMAbsoluteMouseMode(_ isAbsolute: Bool) {
+        guard isGLKVMAbsoluteMouseMode != isAbsolute else { return }
+        isGLKVMAbsoluteMouseMode = isAbsolute
+        pendingAbsoluteMouseMove = nil
+        pendingRelativeMouseMove = nil
+    }
+
+    func handleVideoMouseMove(pointInView: CGPoint, deltaInView: CGSize = .zero, viewSize: CGSize, videoSize: CGSize?) {
         guard isMouseCaptureEnabled else { return }
         let normalized = normalizePointInViewToVideo(pointInView: pointInView, viewSize: viewSize, videoSize: videoSize)
-        let moveEvent = MouseMoveEvent(position: normalized, timestamp: CACurrentMediaTime())
+        let moveEvent = MouseMoveEvent(position: normalized, delta: deltaInView, timestamp: CACurrentMediaTime())
         if transportMode == .glkvmWebSocket {
-            enqueueMouseMoveEvent(moveEvent)
+            if isGLKVMAbsoluteMouseMode {
+                enqueueAbsoluteMouseMoveEvent(moveEvent)
+            } else {
+                enqueueRelativeMouseMoveEvent(moveEvent)
+            }
         } else {
             sendMouseMoveEvent(moveEvent)
         }
     }
 
-    private func enqueueMouseMoveEvent(_ event: MouseMoveEvent) {
+    private func enqueueAbsoluteMouseMoveEvent(_ event: MouseMoveEvent) {
         guard isNormalized(event.position) else { return }
         let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
-        pendingMouseMove = PendingAbsoluteMouseMove(toX: toX, toY: toY)
+        pendingAbsoluteMouseMove = PendingAbsoluteMouseMove(toX: toX, toY: toY)
+        if mouseMoveSenderTask == nil {
+            startMouseMoveSender()
+        }
+    }
+
+    private func enqueueRelativeMouseMoveEvent(_ event: MouseMoveEvent) {
+        let deltaX = Int(event.delta.width.rounded())
+        let deltaY = Int(event.delta.height.rounded())
+        guard deltaX != 0 || deltaY != 0 else { return }
+
+        if var pending = pendingRelativeMouseMove {
+            pending.deltaX += deltaX
+            pending.deltaY += deltaY
+            pendingRelativeMouseMove = pending
+        } else {
+            pendingRelativeMouseMove = PendingRelativeMouseMove(deltaX: deltaX, deltaY: deltaY)
+        }
+
         if mouseMoveSenderTask == nil {
             startMouseMoveSender()
         }
@@ -85,13 +139,28 @@ class InputManager: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
 
-                let snapshot: (move: PendingAbsoluteMouseMove?, mode: TransportMode, ws: GLKVMClient.WebSocketClient?) = await MainActor.run {
-                    let e = self.pendingMouseMove
-                    self.pendingMouseMove = nil
-                    return (e, self.transportMode, self.glkvmWebSocketClient)
+                let snapshot: (
+                    absoluteMove: PendingAbsoluteMouseMove?,
+                    relativeMove: PendingRelativeMouseMove?,
+                    isAbsoluteMouseMode: Bool,
+                    mode: TransportMode,
+                    ws: GLKVMClient.WebSocketClient?
+                ) = await MainActor.run {
+                    let absoluteMove = self.pendingAbsoluteMouseMove
+                    let relativeMove = self.pendingRelativeMouseMove
+                    self.pendingAbsoluteMouseMove = nil
+                    self.pendingRelativeMouseMove = nil
+                    return (
+                        absoluteMove,
+                        relativeMove,
+                        self.isGLKVMAbsoluteMouseMode,
+                        self.transportMode,
+                        self.glkvmWebSocketClient
+                    )
                 }
 
-                guard let move = snapshot.move else {
+                let hasMove = snapshot.isAbsoluteMouseMode ? snapshot.absoluteMove != nil : snapshot.relativeMove != nil
+                guard hasMove else {
                     await MainActor.run {
                         self.mouseMoveSenderTask = nil
                     }
@@ -99,7 +168,11 @@ class InputManager: ObservableObject {
                 }
 
                 if snapshot.mode == .glkvmWebSocket, let ws = snapshot.ws {
-                    try? await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                    if snapshot.isAbsoluteMouseMode, let move = snapshot.absoluteMove {
+                        try? await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                    } else if let move = snapshot.relativeMove {
+                        await Self.sendRelativeMouseMove(move, through: ws)
+                    }
                 }
 
                 try? await Task.sleep(nanoseconds: sendIntervalNs)
@@ -108,7 +181,8 @@ class InputManager: ObservableObject {
     }
 
     private func stopMouseMoveSender() {
-        pendingMouseMove = nil
+        pendingAbsoluteMouseMove = nil
+        pendingRelativeMouseMove = nil
         mouseMoveSenderTask?.cancel()
         mouseMoveSenderTask = nil
     }
@@ -374,6 +448,7 @@ class InputManager: ObservableObject {
         case .mouseMoved:
             let mouseEvent = MouseMoveEvent(
                 position: CGPoint(x: event.locationInWindow.x, y: event.locationInWindow.y),
+                delta: CGSize(width: event.deltaX, height: -event.deltaY),
                 timestamp: event.timestamp
             )
             sendMouseMoveEvent(mouseEvent)
@@ -445,11 +520,13 @@ class InputManager: ObservableObject {
     private func sendMouseButtonEvent(_ event: MouseButtonEvent) {
         if transportMode == .glkvmWebSocket,
            let button = glkvmMouseButtonName(event.button),
-           isNormalized(event.position),
            let ws = glkvmWebSocketClient {
-            let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+            let shouldMove = isGLKVMAbsoluteMouseMode && isNormalized(event.position)
+            let absolutePoint = shouldMove ? glkvmAbsolutePoint(fromNormalized: event.position) : nil
             Task {
-                try? await ws.sendHidMouseMove(toX: toX, toY: toY)
+                if let absolutePoint {
+                    try? await ws.sendHidMouseMove(toX: absolutePoint.0, toY: absolutePoint.1)
+                }
                 try? await ws.sendHidMouseButton(button: button, state: event.isDown)
             }
             return
@@ -470,10 +547,22 @@ class InputManager: ObservableObject {
     }
     
     private func sendMouseMoveEvent(_ event: MouseMoveEvent) {
-        if transportMode == .glkvmWebSocket, isNormalized(event.position), let ws = glkvmWebSocketClient {
+        if transportMode == .glkvmWebSocket, isGLKVMAbsoluteMouseMode, isNormalized(event.position), let ws = glkvmWebSocketClient {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
             Task {
                 try? await ws.sendHidMouseMove(toX: toX, toY: toY)
+            }
+            return
+        }
+
+        if transportMode == .glkvmWebSocket, !isGLKVMAbsoluteMouseMode, let ws = glkvmWebSocketClient {
+            let move = PendingRelativeMouseMove(
+                deltaX: Int(event.delta.width.rounded()),
+                deltaY: Int(event.delta.height.rounded())
+            )
+            guard move.deltaX != 0 || move.deltaY != 0 else { return }
+            Task {
+                await Self.sendRelativeMouseMove(move, through: ws)
             }
             return
         }
@@ -492,8 +581,8 @@ class InputManager: ObservableObject {
     
     private func sendMouseScrollEvent(_ event: MouseScrollEvent) {
         if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
-            let dx = clampInt(Int(event.deltaX.rounded()), min: -127, max: 127)
-            let dy = clampInt(Int(event.deltaY.rounded()), min: -127, max: 127)
+            let dx = Self.clampInt(Int(event.deltaX.rounded()), min: -127, max: 127)
+            let dy = Self.clampInt(Int(event.deltaY.rounded()), min: -127, max: 127)
             Task {
                 try? await ws.sendHidMouseWheel(deltaX: dx, deltaY: dy)
             }
@@ -616,6 +705,9 @@ class InputManager: ObservableObject {
             NSEvent.removeMonitor(monitor)
             mouseEventMonitor = nil
         }
+
+        mouseModeRefreshTask?.cancel()
+        mouseModeRefreshTask = nil
     }
 
     private func reconnectGLKVMWebSocketIfNeeded() async {
@@ -817,7 +909,20 @@ class InputManager: ObservableObject {
         }
     }
 
-    private func clampInt(_ value: Int, min: Int, max: Int) -> Int {
+    private static func sendRelativeMouseMove(_ move: PendingRelativeMouseMove, through ws: GLKVMClient.WebSocketClient) async {
+        var remainingX = move.deltaX
+        var remainingY = move.deltaY
+
+        while remainingX != 0 || remainingY != 0 {
+            let dx = clampInt(remainingX, min: -127, max: 127)
+            let dy = clampInt(remainingY, min: -127, max: 127)
+            try? await ws.sendHidMouseRelative(deltaX: dx, deltaY: dy)
+            remainingX -= dx
+            remainingY -= dy
+        }
+    }
+
+    private static func clampInt(_ value: Int, min: Int, max: Int) -> Int {
         if value < min { return min }
         if value > max { return max }
         return value
@@ -841,6 +946,7 @@ struct MouseButtonEvent {
 
 struct MouseMoveEvent {
     let position: CGPoint
+    let delta: CGSize
     let timestamp: CFTimeInterval
 }
 

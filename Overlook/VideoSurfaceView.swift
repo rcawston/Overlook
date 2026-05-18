@@ -40,10 +40,11 @@ struct VideoSurfaceView: View {
                 if let videoView = webRTCManager.videoView {
                     VideoViewRepresentable(
                         videoView: videoView,
-                        onMouseMove: { pointInView in
+                        onMouseMove: { pointInView, deltaInView in
                             guard !isOCRModeEnabled else { return }
                             inputManager.handleVideoMouseMove(
                                 pointInView: pointInView,
+                                deltaInView: deltaInView,
                                 viewSize: geometry.size,
                                 videoSize: currentVideoSize()
                             )
@@ -255,7 +256,7 @@ struct VideoSurfaceView: View {
 #if canImport(WebRTC)
 struct VideoViewRepresentable: NSViewRepresentable {
     let videoView: RTCMTLNSVideoView
-    let onMouseMove: (CGPoint) -> Void
+    let onMouseMove: (CGPoint, CGSize) -> Void
     let onMouseButton: (MouseButton, Bool, CGPoint) -> Void
     let onScrollWheel: (CGFloat, CGFloat) -> Void
 
@@ -277,12 +278,11 @@ struct VideoViewRepresentable: NSViewRepresentable {
 }
 
 final class TrackingContainerView: NSView {
-    var onMouseMove: ((CGPoint) -> Void)?
+    var onMouseMove: ((CGPoint, CGSize) -> Void)?
     var onMouseButton: ((MouseButton, Bool, CGPoint) -> Void)?
     var onScrollWheel: ((CGFloat, CGFloat) -> Void)?
 
     private var trackingAreaRef: NSTrackingArea?
-    private var lastMoveTimestamp: TimeInterval = 0
 
     private weak var embeddedVideoView: RTCMTLNSVideoView?
     private var embeddedConstraints: [NSLayoutConstraint] = []
@@ -349,17 +349,7 @@ final class TrackingContainerView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-
-        let minInterval = 1.0 / 120.0
-        let ts = event.timestamp
-        if ts - lastMoveTimestamp < minInterval {
-            return
-        }
-        lastMoveTimestamp = ts
-
-        let p = convert(event.locationInWindow, from: nil)
-        let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
-        onMouseMove?(flipped)
+        emitMouseMove(with: event)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -408,21 +398,24 @@ final class TrackingContainerView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         super.mouseDragged(with: event)
-        let p = convert(event.locationInWindow, from: nil)
-        let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
-        onMouseMove?(flipped)
+        emitMouseMove(with: event)
     }
 
     override func rightMouseDragged(with event: NSEvent) {
         super.rightMouseDragged(with: event)
-        let p = convert(event.locationInWindow, from: nil)
-        let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
-        onMouseMove?(flipped)
+        emitMouseMove(with: event)
     }
 
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
         onScrollWheel?(event.scrollingDeltaX, event.scrollingDeltaY)
+    }
+
+    private func emitMouseMove(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
+        let delta = CGSize(width: event.deltaX, height: -event.deltaY)
+        onMouseMove?(flipped, delta)
     }
 }
 #endif
