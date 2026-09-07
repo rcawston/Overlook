@@ -371,7 +371,7 @@
 					"-Xcc",
 					"-Wno-deprecated-declarations",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.overlook.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rcawston.Overlook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = Overlook/Overlook-Bridging-Header.h;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -406,7 +406,7 @@
 					"-Xcc",
 					"-Wno-deprecated-declarations",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.overlook.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rcawston.Overlook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = Overlook/Overlook-Bridging-Header.h;
 				SWIFT_EMIT_LOC_STRINGS = YES;
