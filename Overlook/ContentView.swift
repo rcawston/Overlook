@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var selectedDevice: KVMDevice?
     @State private var isConnected = false
     @State private var isOCRModeEnabled = false
+    @State private var isViewOnly = false
     @State private var isShowingOCRResult = false
     @State private var showingSettings = false
     @State private var selectedText = ""
@@ -119,6 +120,7 @@ struct ContentView: View {
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isViewOnly: isViewOnly,
                     onReconnect: {
                         guard let device = kvmDeviceManager.connectedDevice else { return }
                         Task { @MainActor in
@@ -133,6 +135,7 @@ struct ContentView: View {
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isViewOnly: isViewOnly,
                     onReconnect: {
                         guard let device = kvmDeviceManager.connectedDevice else { return }
                         Task { @MainActor in
@@ -185,6 +188,12 @@ struct ContentView: View {
                             }
                             .disabled(!isConnected)
                             .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                            Button(action: { isViewOnly.toggle() }) {
+                                Image(systemName: isViewOnly ? "eye" : "computermouse")
+                            }
+                            .disabled(!isConnected)
+                            .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
 
                             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                                 Image(systemName: "gearshape")
@@ -276,6 +285,7 @@ struct ContentView: View {
         .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize))
         .background(WindowTitleSetter(title: windowTitle))
         .background(WindowReferenceSetter(window: $windowRef))
+        .focusedSceneValue(\.viewOnlyMode, isConnected ? $isViewOnly : nil)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             applyAppAppearance()
@@ -297,6 +307,9 @@ struct ContentView: View {
         }
         .onChange(of: inputManager.pasteErrorMessage) { _, _ in
             updateInputCaptureForUIOverlays()
+        }
+        .onChange(of: isViewOnly) { _, viewOnly in
+            applyViewOnlyMode(viewOnly)
         }
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
@@ -328,11 +341,14 @@ struct ContentView: View {
                     suppressDeviceAutoConnect = true
                     selectedDevice = device
                     isConnected = true
+                    // Every new connection starts in Control mode.
+                    isViewOnly = false
                     DispatchQueue.main.async {
                         suppressDeviceAutoConnect = false
                     }
                 } else {
                     isConnected = false
+                    isViewOnly = false
                 }
             }
         }
@@ -340,6 +356,11 @@ struct ContentView: View {
             Task { @MainActor in
                 isOCRModeEnabled.toggle()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .overlookToggleViewOnly)) { note in
+            if let window = note.object as? NSWindow, windowRef !== window { return }
+            guard isConnected else { return }
+            isViewOnly.toggle()
         }
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
@@ -420,6 +441,12 @@ struct ContentView: View {
                     }
                     .disabled(!isConnected)
                     .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                    Button(action: { isViewOnly.toggle() }) {
+                        Image(systemName: isViewOnly ? "eye" : "computermouse")
+                    }
+                    .disabled(!isConnected)
+                    .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
 
                     Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                         Image(systemName: "gearshape")
@@ -572,6 +599,26 @@ struct ContentView: View {
         window.setFrame(newFrame, display: true, animate: true)
     }
 
+    /// View-only mode stops keyboard and mouse capture through the regular stop paths, so no
+    /// keyboard, mouse, scroll or paste input reaches the remote. Control mode resumes it,
+    /// unless a settings or connections overlay currently pauses capture.
+    @MainActor
+    private func applyViewOnlyMode(_ viewOnly: Bool) {
+        if viewOnly {
+            inputManager.stopFullInputCapture()
+            return
+        }
+
+        guard isConnected else { return }
+
+        if isInputCapturePausedForUI {
+            pausedCaptureKeyboardWasEnabled = true
+            pausedCaptureMouseWasEnabled = true
+        } else {
+            inputManager.startFullInputCapture()
+        }
+    }
+
     @MainActor
     private func updateInputCaptureForUIOverlays() {
         // The paste error alert counts too, so its keyboard input is not sent to the remote.
@@ -596,7 +643,7 @@ struct ContentView: View {
 
         guard isInputCapturePausedForUI else { return }
 
-        if isConnected {
+        if isConnected, !isViewOnly {
             if let wasKeyboard = pausedCaptureKeyboardWasEnabled {
                 if wasKeyboard {
                     inputManager.startKeyboardCapture()

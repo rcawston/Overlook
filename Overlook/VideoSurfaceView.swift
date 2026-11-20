@@ -16,6 +16,9 @@ struct VideoSurfaceView: View {
     @Binding var selectedText: String
     @Binding var isShowingOCRResult: Bool
 
+    /// When true, no input reaches the remote and dragging the video moves the window.
+    let isViewOnly: Bool
+
     let onReconnect: () -> Void
 
     @State private var ocrDragStart: CGPoint?
@@ -40,8 +43,10 @@ struct VideoSurfaceView: View {
                 if let videoView = webRTCManager.videoView {
                     VideoViewRepresentable(
                         videoView: videoView,
+                        // OCR selection takes precedence over moving the window.
+                        isWindowDragEnabled: isViewOnly && !isOCRModeEnabled,
                         onMouseMove: { pointInView, deltaInView in
-                            guard !isOCRModeEnabled else { return }
+                            guard !isOCRModeEnabled, !isViewOnly else { return }
                             inputManager.handleVideoMouseMove(
                                 pointInView: pointInView,
                                 deltaInView: deltaInView,
@@ -50,7 +55,7 @@ struct VideoSurfaceView: View {
                             )
                         },
                         onMouseButton: { button, isDown, pointInView in
-                            guard !isOCRModeEnabled else { return }
+                            guard !isOCRModeEnabled, !isViewOnly else { return }
                             inputManager.handleVideoMouseButton(
                                 button: button,
                                 isDown: isDown,
@@ -60,7 +65,7 @@ struct VideoSurfaceView: View {
                             )
                         },
                         onScrollWheel: { deltaX, deltaY in
-                            guard !isOCRModeEnabled else { return }
+                            guard !isOCRModeEnabled, !isViewOnly else { return }
                             inputManager.handleVideoMouseScroll(deltaX: deltaX, deltaY: deltaY)
                         }
                     )
@@ -258,12 +263,14 @@ struct VideoSurfaceView: View {
 #if canImport(WebRTC)
 struct VideoViewRepresentable: NSViewRepresentable {
     let videoView: RTCMTLNSVideoView
+    let isWindowDragEnabled: Bool
     let onMouseMove: (CGPoint, CGSize) -> Void
     let onMouseButton: (MouseButton, Bool, CGPoint) -> Void
     let onScrollWheel: (CGFloat, CGFloat) -> Void
 
     func makeNSView(context: Context) -> TrackingContainerView {
         let container = TrackingContainerView()
+        container.isWindowDragEnabled = isWindowDragEnabled
         container.onMouseMove = onMouseMove
         container.onMouseButton = onMouseButton
         container.onScrollWheel = onScrollWheel
@@ -272,6 +279,7 @@ struct VideoViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: TrackingContainerView, context: Context) {
+        nsView.isWindowDragEnabled = isWindowDragEnabled
         nsView.onMouseMove = onMouseMove
         nsView.onMouseButton = onMouseButton
         nsView.onScrollWheel = onScrollWheel
@@ -280,6 +288,7 @@ struct VideoViewRepresentable: NSViewRepresentable {
 }
 
 final class TrackingContainerView: NSView {
+    var isWindowDragEnabled = false
     var onMouseMove: ((CGPoint, CGSize) -> Void)?
     var onMouseButton: ((MouseButton, Bool, CGPoint) -> Void)?
     var onScrollWheel: ((CGFloat, CGFloat) -> Void)?
@@ -355,6 +364,11 @@ final class TrackingContainerView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if isWindowDragEnabled, let window, !window.styleMask.contains(.fullScreen) {
+            // View-only mode: a drag moves the window, a plain click does nothing.
+            window.performDrag(with: event)
+            return
+        }
         super.mouseDown(with: event)
         let p = convert(event.locationInWindow, from: nil)
         let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
