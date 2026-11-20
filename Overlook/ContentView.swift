@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var selectedDevice: KVMDevice?
     @State private var isConnected = false
     @State private var isOCRModeEnabled = false
+    @State private var isViewOnly = false
     @State private var isShowingOCRResult = false
     @State private var showingSettings = false
     @State private var selectedText = ""
@@ -111,12 +112,17 @@ struct ContentView: View {
     }
     
     var body: some View {
+        sessionPresentations(sessionContent)
+    }
+
+    private var sessionContent: some View {
         ZStack(alignment: .trailing) {
             if isFullscreen {
                 VideoSurfaceView(
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isViewOnly: isViewOnly,
                     onReconnect: {
                         guard let device = kvmDeviceManager.connectedDevice else { return }
                         Task { @MainActor in
@@ -131,6 +137,7 @@ struct ContentView: View {
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isViewOnly: isViewOnly,
                     onReconnect: {
                         guard let device = kvmDeviceManager.connectedDevice else { return }
                         Task { @MainActor in
@@ -183,6 +190,8 @@ struct ContentView: View {
                             }
                             .disabled(!isConnected)
                             .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                            viewOnlyToggleButton
 
                             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                                 Image(systemName: "gearshape")
@@ -274,6 +283,7 @@ struct ContentView: View {
         .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize))
         .background(WindowTitleSetter(title: windowTitle))
         .background(WindowReferenceSetter(window: $windowRef))
+        .focusedSceneValue(\.viewOnlyMode, focusedViewOnlyBinding)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             applyAppAppearance()
@@ -292,6 +302,9 @@ struct ContentView: View {
         }
         .onChange(of: showingConnections) { _, _ in
             updateInputCaptureForUIOverlays()
+        }
+        .onChange(of: isViewOnly) { _, viewOnly in
+            applyViewOnlyMode(viewOnly)
         }
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
@@ -318,11 +331,14 @@ struct ContentView: View {
                     suppressDeviceAutoConnect = true
                     selectedDevice = device
                     isConnected = true
+                    // Every new connection starts in Control mode.
+                    isViewOnly = false
                     DispatchQueue.main.async {
                         suppressDeviceAutoConnect = false
                     }
                 } else {
                     isConnected = false
+                    isViewOnly = false
                 }
             }
         }
@@ -331,9 +347,18 @@ struct ContentView: View {
                 isOCRModeEnabled.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .overlookToggleViewOnly)) { note in
+            if let window = note.object as? NSWindow, windowRef !== window { return }
+            guard isConnected else { return }
+            isViewOnly.toggle()
+        }
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
+    }
+
+    private func sessionPresentations(_ content: some View) -> some View {
+        content
         .sheet(isPresented: $isShowingOCRResult) {
             OCRResultView(selectedText: $selectedText)
         }
@@ -379,33 +404,53 @@ struct ContentView: View {
             Text(connectionErrorMessage ?? "")
         }
         .toolbar {
-            if isFullscreen == false {
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: { showingConnections.toggle() }) {
-                        Image(systemName: "personalhotspot")
-                    }
-                    .help("Connections")
+            windowToolbar
+        }
+    }
 
-                    Button(action: { fitWindowToGuest() }) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(webRTCManager.videoSize == nil)
-                    .help("Fit window to guest")
-
-                    Button(action: { toggleOCR() }) {
-                        Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
-                    }
-                    .disabled(!isConnected)
-                    .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
-
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .disabled(!isConnected)
-                    .help("Settings")
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        if isFullscreen == false {
+            ToolbarItemGroup(placement: .automatic) {
+                Button(action: { showingConnections.toggle() }) {
+                    Image(systemName: "personalhotspot")
                 }
+                .help("Connections")
+
+                Button(action: { fitWindowToGuest() }) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .disabled(webRTCManager.videoSize == nil)
+                .help("Fit window to guest")
+
+                Button(action: { toggleOCR() }) {
+                    Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
+                }
+                .disabled(!isConnected)
+                .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                viewOnlyToggleButton
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
+                    Image(systemName: "gearshape")
+                }
+                .disabled(!isConnected)
+                .help("Settings")
             }
         }
+    }
+
+    private var viewOnlyToggleButton: some View {
+        Button(action: { isViewOnly.toggle() }) {
+            Image(systemName: isViewOnly ? "eye" : "computermouse")
+        }
+        .disabled(!isConnected)
+        .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
+    }
+
+    /// Published to the View menu only while connected, so the menu item is disabled otherwise.
+    private var focusedViewOnlyBinding: Binding<Bool>? {
+        isConnected ? $isViewOnly : nil
     }
 
     private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
@@ -549,6 +594,26 @@ struct ContentView: View {
         window.setFrame(newFrame, display: true, animate: true)
     }
 
+    /// View-only mode stops keyboard and mouse capture through the regular stop paths, so no
+    /// keyboard, mouse, scroll or paste input reaches the remote. Control mode resumes it,
+    /// unless a settings or connections overlay currently pauses capture.
+    @MainActor
+    private func applyViewOnlyMode(_ viewOnly: Bool) {
+        if viewOnly {
+            inputManager.stopFullInputCapture()
+            return
+        }
+
+        guard isConnected else { return }
+
+        if isInputCapturePausedForUI {
+            pausedCaptureKeyboardWasEnabled = true
+            pausedCaptureMouseWasEnabled = true
+        } else {
+            inputManager.startFullInputCapture()
+        }
+    }
+
     @MainActor
     private func updateInputCaptureForUIOverlays() {
         let overlayOpen = showingSettings || showingConnections
@@ -572,7 +637,7 @@ struct ContentView: View {
 
         guard isInputCapturePausedForUI else { return }
 
-        if isConnected {
+        if isConnected, !isViewOnly {
             if let wasKeyboard = pausedCaptureKeyboardWasEnabled {
                 if wasKeyboard {
                     inputManager.startKeyboardCapture()
