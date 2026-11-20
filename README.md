@@ -179,6 +179,8 @@ When connected and input capture is active:
 
 - Press `⌘V` on your Mac.
 - Overlook reads your macOS clipboard and sends it to the remote machine via the device’s HID text entry API.
+- Only plain text is sent. Line breaks are normalized to Return key presses; images and formatting are ignored.
+- If a paste fails, Overlook shows an error once and does **not** retry it, because part of the text may already have been typed on the remote machine.
 
 This is ideal for:
 
@@ -186,6 +188,17 @@ This is ideal for:
 - URLs
 - Password manager output (use responsibly)
 - Small scripts / config snippets
+
+### Remote keyboard layout
+
+The device types the text with a keyboard layout (keymap). It must match the layout configured on the remote computer, otherwise characters such as `z`/`y` or symbols come out wrong.
+
+Choose it per device in **Settings → Keyboard settings → Remote keyboard layout (paste)**:
+
+- **Automatic** (default): uses the keymap configured on the KVM device (the **Keymap** setting above it).
+- An explicit layout, e.g. `de` for a German remote computer. The list comes from the device; if it does not provide one, Overlook offers common layouts.
+
+The choice is saved with the device.
 
 ### Tips
 
@@ -268,6 +281,7 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
 - Ensure you’re connected.
 - Ensure input capture is active.
 - Confirm the remote cursor focuses a text field.
+- If the wrong characters appear, set **Remote keyboard layout (paste)** to the remote computer’s layout.
 
 ---
 

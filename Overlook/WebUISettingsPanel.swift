@@ -569,6 +569,22 @@ struct WebUISettingsPanel: View {
                                 }
                             }
 
+                            if let device = kvmDeviceManager.connectedDevice {
+                                Picker("Remote keyboard layout (paste)", selection: Binding(
+                                    get: { device.pasteKeymap ?? "" },
+                                    set: { kvmDeviceManager.setPasteKeymap($0.isEmpty ? nil : $0, for: device) }
+                                )) {
+                                    Text(automaticPasteKeymapLabel()).tag("")
+                                    ForEach(availablePasteKeymaps(current: device.pasteKeymap), id: \.self) { keymap in
+                                        Text(keymap).tag(keymap)
+                                    }
+                                }
+
+                                Text("Layout used to type clipboard text with ⌘V. Saved for this device.")
+                                    .foregroundColor(.secondary)
+                                    .font(.caption)
+                            }
+
                             if let shortcuts = config?.shortcuts, !shortcuts.isEmpty {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text("Shortcuts")
@@ -849,6 +865,31 @@ struct WebUISettingsPanel: View {
             return [current]
         }
         return ["en-us"]
+    }
+
+    /// Common kvmd keymap names, used when the device does not report its own list.
+    private static let fallbackPasteKeymaps: [String] = [
+        "en-us", "en-gb", "de", "de-ch", "fr", "fr-be", "fr-ch", "es", "it",
+        "nl", "pt", "pt-br", "da", "fi", "no", "sv", "pl", "ja",
+    ]
+
+    private func availablePasteKeymaps(current: String?) -> [String] {
+        var list = keymaps?.keymaps.available ?? []
+        if list.isEmpty {
+            list = Self.fallbackPasteKeymaps
+        }
+        // Keep a saved layout selectable even if the device no longer lists it.
+        if let current, !current.isEmpty, !list.contains(current) {
+            list.insert(current, at: 0)
+        }
+        return list
+    }
+
+    private func automaticPasteKeymapLabel() -> String {
+        if let current = config?.keymap, !current.isEmpty {
+            return "Automatic (\(current))"
+        }
+        return "Automatic"
     }
 
     private func load() async {

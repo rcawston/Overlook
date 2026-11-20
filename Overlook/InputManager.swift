@@ -45,9 +45,15 @@ class InputManager: ObservableObject {
     private var heldMouseButtons: [MouseButton: CGPoint] = [:]
     private var heldInputReleaseCancellables: Set<AnyCancellable> = []
     private var webRTCConnectionCancellable: AnyCancellable?
+
+    /// Keyboard layout for typing pasted text on the remote; `nil` uses the device's keymap.
+    private var pasteKeymap: String?
+    private var isPasteInProgress = false
     
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
+    /// Set once when a paste could not be delivered. The paste is never retried automatically.
+    @Published var pasteErrorMessage: String?
 
     enum TransportMode: String, CaseIterable {
         case webRTC
@@ -115,6 +121,10 @@ class InputManager: ObservableObject {
                 // Keep the default absolute-mode behavior if settings cannot be loaded.
             }
         }
+    }
+
+    func setPasteKeymap(_ keymap: String?) {
+        pasteKeymap = keymap
     }
 
     func setGLKVMAbsoluteMouseMode(_ isAbsolute: Bool) {
@@ -523,19 +533,48 @@ class InputManager: ObservableObject {
     }
 
     private func pasteClipboardToRemote() {
+        // Ignore further pastes while one is still being typed, so text is never sent twice.
+        guard !isPasteInProgress, pasteErrorMessage == nil else { return }
         guard let client = glkvmClient else { return }
         guard let text = NSPasteboard.general.string(forType: .string) else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.plainTextForRemotePaste(text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        Task {
+        let configuredKeymap = pasteKeymap
+        isPasteInProgress = true
+        Task { [weak self] in
             do {
-                let keymap: String? = try? await client.getSystemConfig().keymap
-                try await client.hidPrint(text: trimmed, keymap: keymap)
+                let keymap: String?
+                if let configuredKeymap {
+                    keymap = configuredKeymap
+                } else {
+                    keymap = try? await client.getSystemConfig().keymap
+                }
+                // limit 0 disables kvmd's default 1024 character cut-off.
+                try await client.hidPrint(text: trimmed, keymap: keymap, limit: 0)
             } catch {
+                // Deliberately not retried: part of the text may already have been typed remotely.
                 print("Paste to remote failed: \(error)")
+                self?.pasteErrorMessage = "The clipboard text could not be sent to the remote computer. Some of it may already have been typed, so it was not retried. Check the connection and the remote keyboard layout in Settings."
             }
+            self?.isPasteInProgress = false
         }
+    }
+
+    /// Plain text with `\n` line breaks and no control characters other than newline and tab.
+    private static func plainTextForRemotePaste(_ text: String) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+            .replacingOccurrences(of: "\u{2029}", with: "\n")
+            .replacingOccurrences(of: "\u{85}", with: "\n")
+        var scalars = String.UnicodeScalarView()
+        for scalar in normalized.unicodeScalars
+        where scalar == "\n" || scalar == "\t" || scalar.properties.generalCategory != .control {
+            scalars.append(scalar)
+        }
+        return String(scalars)
     }
     
     private func handleMouseEvent(_ event: NSEvent) {
