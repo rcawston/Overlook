@@ -293,6 +293,9 @@ struct ContentView: View {
         .onChange(of: showingConnections) { _, _ in
             updateInputCaptureForUIOverlays()
         }
+        .onChange(of: inputManager.pasteErrorMessage) { _, _ in
+            updateInputCaptureForUIOverlays()
+        }
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
             showFullscreenControls = false
@@ -364,6 +367,19 @@ struct ContentView: View {
                     pendingPassword = ""
                 }
             )
+        }
+        .alert(
+            "Paste Failed",
+            isPresented: Binding(
+                get: { inputManager.pasteErrorMessage != nil },
+                set: { if !$0 { inputManager.pasteErrorMessage = nil } }
+            )
+        ) {
+            Button("OK") {
+                inputManager.pasteErrorMessage = nil
+            }
+        } message: {
+            Text(inputManager.pasteErrorMessage ?? "")
         }
         .alert(
             "Connection Failed",
@@ -551,7 +567,8 @@ struct ContentView: View {
 
     @MainActor
     private func updateInputCaptureForUIOverlays() {
-        let overlayOpen = showingSettings || showingConnections
+        // The paste error alert counts too, so its keyboard input is not sent to the remote.
+        let overlayOpen = showingSettings || showingConnections || inputManager.pasteErrorMessage != nil
 
         if overlayOpen {
             if isInputCapturePausedForUI == false {
