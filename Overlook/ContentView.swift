@@ -112,6 +112,10 @@ struct ContentView: View {
     }
     
     var body: some View {
+        sessionPresentations(sessionContent)
+    }
+
+    private var sessionContent: some View {
         ZStack(alignment: .trailing) {
             if isFullscreen {
                 VideoSurfaceView(
@@ -187,11 +191,7 @@ struct ContentView: View {
                             .disabled(!isConnected)
                             .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
 
-                            Button(action: { isViewOnly.toggle() }) {
-                                Image(systemName: isViewOnly ? "eye" : "computermouse")
-                            }
-                            .disabled(!isConnected)
-                            .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
+                            viewOnlyToggleButton
 
                             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                                 Image(systemName: "gearshape")
@@ -283,7 +283,7 @@ struct ContentView: View {
         .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize))
         .background(WindowTitleSetter(title: windowTitle))
         .background(WindowReferenceSetter(window: $windowRef))
-        .focusedSceneValue(\.viewOnlyMode, isConnected ? $isViewOnly : nil)
+        .focusedSceneValue(\.viewOnlyMode, focusedViewOnlyBinding)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             applyAppAppearance()
@@ -355,6 +355,10 @@ struct ContentView: View {
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
+    }
+
+    private func sessionPresentations(_ content: some View) -> some View {
+        content
         .sheet(isPresented: $isShowingOCRResult) {
             OCRResultView(selectedText: $selectedText)
         }
@@ -400,39 +404,53 @@ struct ContentView: View {
             Text(connectionErrorMessage ?? "")
         }
         .toolbar {
-            if isFullscreen == false {
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: { showingConnections.toggle() }) {
-                        Image(systemName: "personalhotspot")
-                    }
-                    .help("Connections")
+            windowToolbar
+        }
+    }
 
-                    Button(action: { fitWindowToGuest() }) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(webRTCManager.videoSize == nil)
-                    .help("Fit window to guest")
-
-                    Button(action: { toggleOCR() }) {
-                        Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
-                    }
-                    .disabled(!isConnected)
-                    .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
-
-                    Button(action: { isViewOnly.toggle() }) {
-                        Image(systemName: isViewOnly ? "eye" : "computermouse")
-                    }
-                    .disabled(!isConnected)
-                    .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
-
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .disabled(!isConnected)
-                    .help("Settings")
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        if isFullscreen == false {
+            ToolbarItemGroup(placement: .automatic) {
+                Button(action: { showingConnections.toggle() }) {
+                    Image(systemName: "personalhotspot")
                 }
+                .help("Connections")
+
+                Button(action: { fitWindowToGuest() }) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .disabled(webRTCManager.videoSize == nil)
+                .help("Fit window to guest")
+
+                Button(action: { toggleOCR() }) {
+                    Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
+                }
+                .disabled(!isConnected)
+                .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                viewOnlyToggleButton
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
+                    Image(systemName: "gearshape")
+                }
+                .disabled(!isConnected)
+                .help("Settings")
             }
         }
+    }
+
+    private var viewOnlyToggleButton: some View {
+        Button(action: { isViewOnly.toggle() }) {
+            Image(systemName: isViewOnly ? "eye" : "computermouse")
+        }
+        .disabled(!isConnected)
+        .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
+    }
+
+    /// Published to the View menu only while connected, so the menu item is disabled otherwise.
+    private var focusedViewOnlyBinding: Binding<Bool>? {
+        isConnected ? $isViewOnly : nil
     }
 
     private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
