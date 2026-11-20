@@ -57,6 +57,7 @@ class InputManager: ObservableObject {
     @Published var isMouseCaptureEnabled = false
     /// Set once when a paste could not be delivered. The paste is never retried automatically.
     @Published var pasteErrorMessage: String?
+    @Published private(set) var remoteKeyboardShortcuts = RemoteKeyboardShortcuts.load()
 
     enum TransportMode: String, CaseIterable {
         case webRTC
@@ -406,17 +407,27 @@ class InputManager: ObservableObject {
                 }
             }
 
+            // Auto-repeat of a key whose press was handled locally stays local. A new press
+            // means an earlier local release was missed, so its release is forwarded again.
+            if isKeyDown, suppressedKeyUps.contains(keyCode) {
+                if event.isARepeat {
+                    return
+                }
+                suppressedKeyUps.remove(keyCode)
+            }
+
+            if isKeyDown, !event.isARepeat,
+               let action = remoteKeyboardShortcuts.action(forKeyCode: keyCode, modifiers: modifiers) {
+                suppressedKeyUps.insert(keyCode)
+                performRemoteKeyboardAction(action, modifiers: modifiers)
+                return
+            }
+
             if isKeyDown, modifiers.contains(.command) {
                 if keyCode == 8 {
                     prepareForLocalCommandShortcut()
                     suppressedKeyUps.insert(keyCode)
                     NotificationCenter.default.post(name: .overlookToggleCopyMode, object: nil)
-                    return
-                }
-                if keyCode == 9 {
-                    prepareForLocalCommandShortcut()
-                    suppressedKeyUps.insert(keyCode)
-                    pasteClipboardToRemote()
                     return
                 }
 
@@ -512,6 +523,61 @@ class InputManager: ObservableObject {
         pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
         activeCommandKeyCode = nil
         commandKeySentToRemote = false
+    }
+
+    /// Saves and applies a new shortcut. Returns why it was rejected, or `nil` on success.
+    @discardableResult
+    func setRemoteKeyboardShortcut(_ shortcut: RemoteKeyboardShortcut?, for action: RemoteKeyboardAction) -> String? {
+        if let shortcut, let error = remoteKeyboardShortcuts.validationError(for: shortcut, action: action) {
+            return error
+        }
+        var updated = remoteKeyboardShortcuts
+        updated.set(shortcut, for: action)
+        updated.save()
+        remoteKeyboardShortcuts = updated
+        return nil
+    }
+
+    private func performRemoteKeyboardAction(_ action: RemoteKeyboardAction, modifiers: NSEvent.ModifierFlags) {
+        // The shortcut's modifiers may already be held on the remote. Release them first so
+        // that it only receives the action itself.
+        var modifierReleases: [String] = []
+        if commandKeySentToRemote, let code = activeCommandKeyCode, let metaKey = glkvmKeyForMacKeyCode(code) {
+            modifierReleases.append(metaKey)
+        }
+        if modifiers.contains(.shift) {
+            modifierReleases += ["ShiftLeft", "ShiftRight"]
+        }
+        if modifiers.contains(.control) {
+            modifierReleases += ["ControlLeft", "ControlRight"]
+        }
+        if modifiers.contains(.option) {
+            modifierReleases += ["AltLeft", "AltRight"]
+        }
+        pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
+        activeCommandKeyCode = nil
+        commandKeySentToRemote = false
+
+        let actionKeys = action.remoteKeys
+        if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
+            Task {
+                for key in modifierReleases {
+                    try? await ws.sendHidKey(key: key, state: false)
+                }
+                // Press the keys as one combination and always release all of them, even if
+                // a press could not be sent.
+                for key in actionKeys {
+                    try? await ws.sendHidKey(key: key, state: true)
+                }
+                for key in actionKeys.reversed() {
+                    try? await ws.sendHidKey(key: key, state: false)
+                }
+            }
+        }
+
+        if action == .paste {
+            pasteClipboardToRemote()
+        }
     }
 
     private func clearPendingCommandKey() {
