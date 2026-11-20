@@ -57,6 +57,14 @@ class MenuBarAgent: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
 
+        kvmDeviceManager.$savedPasswordDeviceKeys
+            .dropFirst()
+            .sink { [weak self] _ in
+                // Published before the value changes; rebuild once it has.
+                DispatchQueue.main.async { self?.updateDeviceMenu() }
+            }
+            .store(in: &cancellables)
+
         kvmDeviceManager.$connectedDevice
             .sink { [weak self] device in
                 guard let self else { return }
@@ -197,6 +205,23 @@ class MenuBarAgent: NSObject, ObservableObject {
         forgetItem.submenu = forgetMenu
         deviceMenu.addItem(forgetItem)
 
+        // Forget passwords saved in the Keychain
+        let passwordDevices = savedDevices.filter { kvmDeviceManager.hasSavedPassword(for: $0) }
+        let forgetPasswordItem = NSMenuItem(title: "Forget Saved Password", action: nil, keyEquivalent: "")
+        let forgetPasswordMenu = NSMenu()
+        if passwordDevices.isEmpty {
+            forgetPasswordMenu.addItem(NSMenuItem(title: "No saved passwords", action: nil, keyEquivalent: ""))
+        } else {
+            for device in passwordDevices {
+                let item = NSMenuItem(title: device.name, action: #selector(forgetSavedPassword(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = device
+                forgetPasswordMenu.addItem(item)
+            }
+        }
+        forgetPasswordItem.submenu = forgetPasswordMenu
+        deviceMenu.addItem(forgetPasswordItem)
+
         // Remove manual devices
         let manualDevices = availableDevices.filter { $0.id.hasPrefix("manual-") }
         let removeItem = NSMenuItem(title: "Remove Manual Device", action: nil, keyEquivalent: "")
@@ -248,23 +273,33 @@ class MenuBarAgent: NSObject, ObservableObject {
         }
     }
 
-    private func promptForPassword(deviceName: String) -> String? {
+    private func promptForPassword(message: String, rememberByDefault: Bool) -> (password: String, remember: Bool)? {
         let alert = NSAlert()
         alert.messageText = "Password Required"
-        alert.informativeText = "Enter password for \(deviceName)"
+        alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Connect")
         alert.addButton(withTitle: "Cancel")
 
-        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 22))
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 50))
+
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 28, width: 260, height: 22))
         passwordField.placeholderString = "Password"
-        alert.accessoryView = passwordField
+
+        let rememberCheckbox = NSButton(checkboxWithTitle: "Remember password in Keychain", target: nil, action: nil)
+        rememberCheckbox.frame = NSRect(x: 0, y: 0, width: 260, height: 20)
+        rememberCheckbox.state = rememberByDefault ? .on : .off
+
+        view.addSubview(passwordField)
+        view.addSubview(rememberCheckbox)
+        alert.accessoryView = view
+        alert.window.initialFirstResponder = passwordField
 
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else { return nil }
 
         let pw = passwordField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return pw.isEmpty ? nil : pw
+        return pw.isEmpty ? nil : (pw, rememberCheckbox.state == .on)
     }
 
     private func showError(title: String, message: String) {
@@ -325,25 +360,28 @@ class MenuBarAgent: NSObject, ObservableObject {
         Task { await connectSession(to: device) }
     }
 
-    private func connectSession(to device: KVMDevice) async {
+    private func connectSession(to device: KVMDevice, password: String? = nil, rememberPassword: Bool? = nil) async {
         showMainWindow()
 
-        do {
-            let connected = try await kvmDeviceManager.connectToDevice(device)
-            await finishSessionConnect(connected)
-        } catch {
-            if let kvmError = error as? KVMError, kvmError == .authenticationFailed {
-                guard let password = promptForPassword(deviceName: device.name) else { return }
-                do {
-                    let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
-                    await finishSessionConnect(connected)
-                } catch {
-                    showError(title: "Failed to connect", message: String(describing: error))
-                }
-                return
+        var password = password
+        var rememberPassword = rememberPassword
+        while true {
+            do {
+                let connected = try await kvmDeviceManager.connectToDevice(device, password: password, rememberPassword: rememberPassword)
+                await finishSessionConnect(connected)
+            } catch let kvmError as KVMError where kvmError.promptsForPassword {
+                // Only the user retries a login; a rejected saved password is never resent.
+                guard let entry = promptForPassword(
+                    message: kvmError.passwordPromptMessage(deviceName: device.name),
+                    rememberByDefault: kvmDeviceManager.hasSavedPassword(for: device)
+                ) else { return }
+                password = entry.password
+                rememberPassword = entry.remember
+                continue
+            } catch {
+                showError(title: "Failed to connect", message: String(describing: error))
             }
-
-            showError(title: "Failed to connect", message: String(describing: error))
+            return
         }
     }
 
@@ -394,22 +432,27 @@ class MenuBarAgent: NSObject, ObservableObject {
         alert.addButton(withTitle: "Cancel")
 
         let view = NSView()
-        view.frame = NSRect(x: 0, y: 0, width: 260, height: 86)
+        view.frame = NSRect(x: 0, y: 0, width: 260, height: 112)
 
-        let hostField = NSTextField(frame: NSRect(x: 0, y: 56, width: 260, height: 22))
+        let hostField = NSTextField(frame: NSRect(x: 0, y: 84, width: 260, height: 22))
         hostField.placeholderString = "Host or IP (optionally host:port)"
 
-        let portField = NSTextField(frame: NSRect(x: 0, y: 28, width: 260, height: 22))
+        let portField = NSTextField(frame: NSRect(x: 0, y: 56, width: 260, height: 22))
         portField.placeholderString = "Port"
         portField.stringValue = "443"
         portField.integerValue = 443
 
-        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 22))
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 28, width: 260, height: 22))
         passwordField.placeholderString = "Password (optional)"
+
+        let rememberCheckbox = NSButton(checkboxWithTitle: "Remember password in Keychain", target: nil, action: nil)
+        rememberCheckbox.frame = NSRect(x: 0, y: 0, width: 260, height: 20)
+        rememberCheckbox.state = .off
 
         view.addSubview(hostField)
         view.addSubview(portField)
         view.addSubview(passwordField)
+        view.addSubview(rememberCheckbox)
         alert.accessoryView = view
 
         let response = alert.runModal()
@@ -437,19 +480,14 @@ class MenuBarAgent: NSObject, ObservableObject {
         let port = Int(portString) ?? 443
         let device = kvmDeviceManager.addManualDevice(host: host, port: port, type: .glinetComet)
         let password = passwordField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rememberPassword = rememberCheckbox.state == .on
 
         Task {
-            if password.isEmpty {
-                await connectSession(to: device)
-            } else {
-                showMainWindow()
-                do {
-                    let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
-                    await finishSessionConnect(connected)
-                } catch {
-                    showError(title: "Failed to connect", message: String(describing: error))
-                }
-            }
+            await connectSession(
+                to: device,
+                password: password.isEmpty ? nil : password,
+                rememberPassword: rememberPassword ? true : nil
+            )
         }
     }
     
@@ -515,6 +553,11 @@ class MenuBarAgent: NSObject, ObservableObject {
             return
         }
         kvmDeviceManager.forgetDevice(device)
+    }
+
+    @objc private func forgetSavedPassword(_ sender: NSMenuItem) {
+        guard let device = sender.representedObject as? KVMDevice else { return }
+        kvmDeviceManager.forgetSavedPassword(for: device)
     }
 
     @objc private func removeManualDevice(_ sender: NSMenuItem) {
