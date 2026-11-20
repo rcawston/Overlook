@@ -6,6 +6,8 @@ import SwiftUI
 
 extension Notification.Name {
     static let overlookToggleCopyMode = Notification.Name("overlook.toggleCopyMode")
+    /// Posted with the event's window as object when ⌘⇧M is pressed during keyboard capture.
+    static let overlookToggleViewOnly = Notification.Name("overlook.toggleViewOnly")
 }
 
 @MainActor
@@ -285,6 +287,18 @@ class InputManager: ObservableObject {
             }
 
             if isKeyDown, modifiers.contains(.command) {
+                if keyCode == 46,
+                   modifiers.intersection([.command, .shift, .option, .control]) == [.command, .shift] {
+                    // ⌘⇧M toggles view-only mode locally. Capture stops before the key-up
+                    // arrives, so the key-up is not suppressed here; Shift was already
+                    // forwarded as a modifier press and is released explicitly.
+                    prepareForLocalCommandShortcut()
+                    for shiftKeyCode: UInt16 in [56, 60] {
+                        sendKeyEvent(KeyEvent(keyCode: shiftKeyCode, isKeyDown: false, modifiers: [], timestamp: event.timestamp))
+                    }
+                    NotificationCenter.default.post(name: .overlookToggleViewOnly, object: event.window)
+                    return
+                }
                 if keyCode == 8 {
                     prepareForLocalCommandShortcut()
                     suppressedKeyUps.insert(keyCode)
