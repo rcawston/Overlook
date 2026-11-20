@@ -62,6 +62,7 @@ class MenuBarAgent: NSObject, ObservableObject {
                 guard let self else { return }
                 self.currentDevice = device
                 self.isConnected = (device != nil)
+                self.inputManager.setPasteKeymap(device?.pasteKeymap)
                 self.updateStatusIcon()
                 self.updateStatusMenuItem()
                 self.updateDeviceMenu()
