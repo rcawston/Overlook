@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		01000001 /* OverlookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000001 /* OverlookApp.swift */; };
 		01000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000002 /* ContentView.swift */; };
+		01000020 /* WindowSizeMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000022 /* WindowSizeMenu.swift */; };
 		01000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 02000003 /* Assets.xcassets */; };
 		01000006 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000006 /* WebRTCManager.swift */; };
 		01000007 /* InputManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000007 /* InputManager.swift */; };
@@ -34,6 +35,7 @@
 /* Begin PBXFileReference section */
 		02000001 /* OverlookApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlookApp.swift; sourceTree = "<group>"; };
 		02000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		02000022 /* WindowSizeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSizeMenu.swift; sourceTree = "<group>"; };
 		02000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		02000005 /* Overlook.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Overlook.entitlements; sourceTree = "<group>"; };
 		02000006 /* WebRTCManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCManager.swift; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 			children = (
 				02000001 /* OverlookApp.swift */,
 				02000002 /* ContentView.swift */,
+				02000022 /* WindowSizeMenu.swift */,
 				02000019 /* ContentControlBar.swift */,
 				0200001A /* VideoSurfaceView.swift */,
 				0200001B /* StatusBarView.swift */,
@@ -198,6 +201,7 @@
 			files = (
 				01000001 /* OverlookApp.swift in Sources */,
 				01000002 /* ContentView.swift in Sources */,
+				01000020 /* WindowSizeMenu.swift in Sources */,
 				0100001A /* ContentControlBar.swift in Sources */,
 				0100001B /* VideoSurfaceView.swift in Sources */,
 				0100001C /* StatusBarView.swift in Sources */,
