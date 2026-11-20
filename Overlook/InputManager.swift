@@ -37,6 +37,14 @@ class InputManager: ObservableObject {
     private var activeCommandKeyCode: UInt16?
     private var commandKeySentToRemote: Bool = false
     private var suppressedKeyUps: Set<UInt16> = []
+
+    // Keys (in press order) and mouse buttons (with their press position) whose press has
+    // been sent to the remote and whose release has not. Used to release them when input
+    // can no longer reach us, e.g. on focus loss, capture stop or disconnect.
+    private var heldKeyCodes: [UInt16] = []
+    private var heldMouseButtons: [MouseButton: CGPoint] = [:]
+    private var heldInputReleaseCancellables: Set<AnyCancellable> = []
+    private var webRTCConnectionCancellable: AnyCancellable?
     
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
@@ -49,11 +57,36 @@ class InputManager: ObservableObject {
     @Published var transportMode: TransportMode = .glkvmWebSocket
     @Published private(set) var isGLKVMAbsoluteMouseMode = true
     
+    init() {
+        // Key and button releases that happen while another window or app is focused never
+        // reach Overlook, so release everything still held on the remote when focus leaves.
+        NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)
+            .merge(with: NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    _ = self?.releaseHeldInput()
+                }
+            }
+            .store(in: &heldInputReleaseCancellables)
+    }
+
     func setup(with webRTCManager: WebRTCManager) {
         self.webRTCManager = webRTCManager
+        // A lost or restarted stream may swallow releases (the video view is torn down).
+        webRTCConnectionCancellable = webRTCManager.$isConnected
+            .removeDuplicates()
+            .filter { !$0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    _ = self?.releaseHeldInput()
+                }
+            }
     }
 
     func setGLKVMClient(_ client: GLKVMClient?) {
+        let isNewClient = client !== glkvmClient
         mouseModeRefreshTask?.cancel()
         mouseModeRefreshTask = nil
         glkvmClient = client
@@ -63,6 +96,9 @@ class InputManager: ObservableObject {
         if client == nil {
             disconnectGLKVMWebSocket()
             return
+        }
+        if isNewClient {
+            releaseHeldInput()
         }
         Task { [weak self] in
             await self?.reconnectGLKVMWebSocketIfNeeded()
@@ -201,6 +237,9 @@ class InputManager: ObservableObject {
     }
 
     func setTransportMode(_ mode: TransportMode) {
+        if mode != transportMode {
+            releaseHeldInput()
+        }
         transportMode = mode
         switch mode {
         case .webRTC:
@@ -215,11 +254,76 @@ class InputManager: ObservableObject {
 
     func disconnectGLKVMWebSocket() {
         stopMouseMoveSender()
+        let release = releaseHeldInput()
         let ws = glkvmWebSocketClient
         glkvmWebSocketClient = nil
         Task {
+            await release?.value
             await ws?.disconnect()
         }
+    }
+
+    /// Sends a release for every key and mouse button still held on the remote, then
+    /// forgets them. If there is no transport anymore, the tracking is only cleared.
+    /// The returned task finishes once the releases were handed to the HID WebSocket.
+    @discardableResult
+    func releaseHeldInput() -> Task<Void, Never>? {
+        let keyCodes = Array(heldKeyCodes.reversed())
+        let buttons = heldMouseButtons
+        heldKeyCodes.removeAll()
+        heldMouseButtons.removeAll()
+        suppressedKeyUps.removeAll()
+
+        // Command stays pending: if it is still physically held, the next shortcut re-sends it.
+        pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
+        activeCommandKeyCode = nil
+        commandKeySentToRemote = false
+
+        guard !keyCodes.isEmpty || !buttons.isEmpty else { return nil }
+
+        if let ws = glkvmWebSocketClient {
+            let buttonNames = buttons.keys.compactMap { glkvmMouseButtonName($0) }
+            let keyNames = keyCodes.compactMap { glkvmKeyForMacKeyCode($0) }
+            return Task {
+                for button in buttonNames {
+                    try? await ws.sendHidMouseButton(button: button, state: false)
+                }
+                for key in keyNames {
+                    try? await ws.sendHidKey(key: key, state: false)
+                }
+            }
+        }
+
+        guard transportMode == .webRTC else { return nil }
+        let timestamp = CACurrentMediaTime()
+        for (button, position) in buttons {
+            sendMouseButtonEvent(
+                MouseButtonEvent(button: button, isDown: false, position: position, timestamp: timestamp),
+                tracked: false
+            )
+        }
+        for keyCode in keyCodes {
+            sendKeyEvent(
+                KeyEvent(keyCode: keyCode, isKeyDown: false, modifiers: [], timestamp: timestamp),
+                tracked: false
+            )
+        }
+        return nil
+    }
+
+    /// Records a key press or release sent to the remote. Returns false for the release of a
+    /// key whose press was never sent, which must not be forwarded.
+    @discardableResult
+    private func trackKey(_ keyCode: UInt16, isDown: Bool) -> Bool {
+        if isDown {
+            if !heldKeyCodes.contains(keyCode) {
+                heldKeyCodes.append(keyCode)
+            }
+            return true
+        }
+        guard let index = heldKeyCodes.firstIndex(of: keyCode) else { return false }
+        heldKeyCodes.remove(at: index)
+        return true
     }
     
     func startKeyboardCapture() {
@@ -241,6 +345,7 @@ class InputManager: ObservableObject {
     
     func stopKeyboardCapture() {
         isKeyboardCaptureEnabled = false
+        releaseHeldInput()
         
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
@@ -259,6 +364,7 @@ class InputManager: ObservableObject {
     
     func stopMouseCapture() {
         isMouseCaptureEnabled = false
+        releaseHeldInput()
         
         if let monitor = mouseEventMonitor {
             NSEvent.removeMonitor(monitor)
@@ -281,7 +387,10 @@ class InputManager: ObservableObject {
 
             if !isKeyDown, suppressedKeyUps.contains(keyCode) {
                 suppressedKeyUps.remove(keyCode)
-                return
+                // Still forward the release if an earlier press of this key reached the remote.
+                if !heldKeyCodes.contains(keyCode) {
+                    return
+                }
             }
 
             if isKeyDown, modifiers.contains(.command) {
@@ -307,6 +416,8 @@ class InputManager: ObservableObject {
                     activeCommandKeyCode = pending
                     pendingCommandKeyCode = nil
                     commandKeySentToRemote = true
+                    trackKey(pending, isDown: true)
+                    trackKey(keyCode, isDown: true)
 
                     Task {
                         try? await ws.sendHidKey(key: metaKey, state: true)
@@ -381,14 +492,8 @@ class InputManager: ObservableObject {
     }
 
     private func prepareForLocalCommandShortcut() {
-        if commandKeySentToRemote,
-           transportMode == .glkvmWebSocket,
-           let ws = glkvmWebSocketClient,
-           let code = activeCommandKeyCode,
-           let metaKey = glkvmKeyForMacKeyCode(code) {
-            Task {
-                try? await ws.sendHidKey(key: metaKey, state: false)
-            }
+        if commandKeySentToRemote, let code = activeCommandKeyCode {
+            sendKeyEvent(KeyEvent(keyCode: code, isKeyDown: false, modifiers: [], timestamp: CACurrentMediaTime()))
         }
 
         pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
@@ -495,7 +600,11 @@ class InputManager: ObservableObject {
         }
     }
     
-    private func sendKeyEvent(_ event: KeyEvent) {
+    private func sendKeyEvent(_ event: KeyEvent, tracked: Bool = true) {
+        if tracked, !trackKey(event.keyCode, isDown: event.isKeyDown) {
+            return
+        }
+
         if transportMode == .glkvmWebSocket,
            let key = glkvmKeyForMacKeyCode(event.keyCode),
            let ws = glkvmWebSocketClient {
@@ -518,7 +627,15 @@ class InputManager: ObservableObject {
         webRTCManager?.sendInputEvent(inputEvent)
     }
     
-    private func sendMouseButtonEvent(_ event: MouseButtonEvent) {
+    private func sendMouseButtonEvent(_ event: MouseButtonEvent, tracked: Bool = true) {
+        if tracked {
+            if event.isDown {
+                heldMouseButtons[event.button] = event.position
+            } else if heldMouseButtons.removeValue(forKey: event.button) == nil {
+                return
+            }
+        }
+
         if transportMode == .glkvmWebSocket,
            let button = glkvmMouseButtonName(event.button),
            let ws = glkvmWebSocketClient {
