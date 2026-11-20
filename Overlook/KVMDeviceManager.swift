@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Combine
 import CryptoKit
+import Security
 
 @MainActor
 final class KVMDeviceManager: NSObject, ObservableObject {
@@ -11,6 +12,12 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     @Published var isScanning = false
     @Published var scanProgress: Double = 0.0
     @Published var autoScanEnabled: Bool = false
+    /// Credential keys (`host:port`) of devices with a password saved in the Keychain.
+    @Published private(set) var savedPasswordDeviceKeys: Set<String> = []
+
+    /// Saved passwords that a device rejected during this session. They are never
+    /// tried again automatically, so a wrong password cannot lock out the account.
+    private var rejectedSavedPasswordKeys: Set<String> = []
     
     private var networkMonitor: NWPathMonitor?
     private var scanTimer: Timer?
@@ -51,7 +58,9 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         let port: Int
         let name: String
         let type: KVMDeviceType
-        let authToken: String
+        // Always written empty; tokens are kept in the Keychain. The field remains so
+        // older builds can still read the saved device list.
+        var authToken: String
         let capabilities: Set<KVMCapability>
     }
     
@@ -59,6 +68,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         super.init()
         setupNetworkMonitoring()
         loadPersistedDevices()
+        savedPasswordDeviceKeys = DeviceCredentialStore.accounts(of: .password)
     }
     
     private func setupNetworkMonitoring() {
@@ -620,6 +630,12 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         current.removeAll { $0.host == host && $0.port == port }
         writePersistedDevices(current)
 
+        let key = credentialKey(host: host, port: port)
+        DeviceCredentialStore.delete(.authToken, account: key)
+        DeviceCredentialStore.delete(.password, account: key)
+        savedPasswordDeviceKeys.remove(key)
+        rejectedSavedPasswordKeys.remove(key)
+
         availableDevices.removeAll { $0.host == host && $0.port == port }
         if connectedDevice?.host == host, connectedDevice?.port == port {
             connectedDevice = nil
@@ -627,14 +643,34 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         }
     }
     
+    func hasSavedPassword(for device: KVMDevice) -> Bool {
+        savedPasswordDeviceKeys.contains(credentialKey(host: device.host, port: device.port))
+    }
+
+    func forgetSavedPassword(for device: KVMDevice) {
+        let key = credentialKey(host: device.host, port: device.port)
+        DeviceCredentialStore.delete(.password, account: key)
+        savedPasswordDeviceKeys.remove(key)
+        rejectedSavedPasswordKeys.remove(key)
+    }
+
+    /// Connects using the device's token, or the token stored in the Keychain. When the token
+    /// is missing or rejected, `password` (entered by the user) is used, or else a password
+    /// saved in the Keychain. A saved password is tried at most once: if the device rejects
+    /// it, this throws `KVMError.savedPasswordRejected` so the user is asked instead.
+    ///
+    /// `rememberPassword` applies to a successful login with `password`: `true` saves it in
+    /// the Keychain, `false` removes a saved one, `nil` leaves a saved one unchanged.
     @discardableResult
-    func connectToDevice(_ device: KVMDevice, authToken: String? = nil, password: String? = nil, user: String = "admin") async throws -> KVMDevice {
+    func connectToDevice(_ device: KVMDevice, authToken: String? = nil, password: String? = nil, rememberPassword: Bool? = nil, user: String = "admin") async throws -> KVMDevice {
         // Validate device connection
         let isValid = try await validateDeviceConnection(device)
         guard isValid else {
             throw KVMError.connectionFailed
         }
         
+        let key = credentialKey(host: device.host, port: device.port)
+
         // Update device auth token if provided
         var finalDevice: KVMDevice
         if let token = authToken {
@@ -649,6 +685,9 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             finalDevice = updatedDevice
         } else {
             finalDevice = device
+            if finalDevice.authToken.isEmpty, let storedToken = DeviceCredentialStore.read(.authToken, account: key) {
+                finalDevice.authToken = storedToken
+            }
         }
 
         guard let client = try? GLKVMClient(device: finalDevice, allowInsecureTLS: true) else {
@@ -658,19 +697,41 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         do {
             try await client.authCheck()
         } catch {
-            if let password, !password.isEmpty {
-                let token = try await client.authLogin(user: user, password: password)
-                client.authToken = token
+            let tokenRejected = Self.isAuthRejection(error)
+            if tokenRejected, !finalDevice.authToken.isEmpty {
+                DeviceCredentialStore.delete(.authToken, account: key)
+            }
 
-                var updated = finalDevice
-                updated.authToken = token
-                if let index = availableDevices.firstIndex(where: { $0.id == updated.id }) {
-                    availableDevices[index] = updated
+            let token: String
+            if let password, !password.isEmpty {
+                do {
+                    token = try await client.authLogin(user: user, password: password)
+                } catch where Self.isLoginRejection(error) {
+                    throw KVMError.passwordRejected
                 }
-                finalDevice = updated
+                updateSavedPassword(password, remember: rememberPassword, key: key)
+            } else if rejectedSavedPasswordKeys.contains(key) {
+                throw KVMError.savedPasswordRejected
+            } else if tokenRejected || finalDevice.authToken.isEmpty,
+                      let savedPassword = DeviceCredentialStore.read(.password, account: key) {
+                do {
+                    token = try await client.authLogin(user: user, password: savedPassword)
+                } catch where Self.isLoginRejection(error) {
+                    rejectedSavedPasswordKeys.insert(key)
+                    throw KVMError.savedPasswordRejected
+                }
             } else {
                 throw KVMError.authenticationFailed
             }
+
+            client.authToken = token
+
+            var updated = finalDevice
+            updated.authToken = token
+            if let index = availableDevices.firstIndex(where: { $0.id == updated.id }) {
+                availableDevices[index] = updated
+            }
+            finalDevice = updated
         }
 
         let persisted = persistDevice(finalDevice)
@@ -679,13 +740,52 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         return persisted
     }
 
+    private func updateSavedPassword(_ password: String, remember: Bool?, key: String) {
+        if remember == true {
+            if DeviceCredentialStore.save(password, as: .password, account: key) {
+                savedPasswordDeviceKeys.insert(key)
+            }
+        } else if remember == false || rejectedSavedPasswordKeys.contains(key) {
+            // A saved password the device rejected is known to be wrong; do not keep it.
+            DeviceCredentialStore.delete(.password, account: key)
+            savedPasswordDeviceKeys.remove(key)
+        }
+        rejectedSavedPasswordKeys.remove(key)
+    }
+
+    /// The device answered, but did not accept the token (missing, expired or revoked).
+    private static func isAuthRejection(_ error: Error) -> Bool {
+        if case GLKVMClient.ClientError.httpError(let statusCode, _) = error {
+            return statusCode == 401 || statusCode == 403
+        }
+        return false
+    }
+
+    /// The device answered the login, but did not return a session: wrong password, a locked
+    /// account, or an extra step such as a second factor. Transport and server errors are not
+    /// rejections, because the password was not evaluated.
+    private static func isLoginRejection(_ error: Error) -> Bool {
+        switch error {
+        case GLKVMClient.ClientError.httpError(let statusCode, _):
+            return statusCode < 500
+        case GLKVMClient.ClientError.decodingFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func persistDevice(_ device: KVMDevice) -> KVMDevice {
+        if !device.authToken.isEmpty {
+            DeviceCredentialStore.save(device.authToken, as: .authToken, account: credentialKey(host: device.host, port: device.port))
+        }
+
         let record = PersistedDevice(
             host: device.host,
             port: device.port,
             name: device.name,
             type: device.type,
-            authToken: device.authToken,
+            authToken: "",
             capabilities: device.capabilities
         )
 
@@ -707,8 +807,22 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     }
 
     private func loadPersistedDevices() {
-        let records = readPersistedDevices()
+        var records = readPersistedDevices()
         guard !records.isEmpty else { return }
+
+        // One-time migration: earlier versions stored tokens in plain text in UserDefaults.
+        // A token stays there only if the Keychain write fails; it is retried next launch.
+        var migrated = false
+        for index in records.indices where !records[index].authToken.isEmpty {
+            let record = records[index]
+            if DeviceCredentialStore.save(record.authToken, as: .authToken, account: credentialKey(host: record.host, port: record.port)) {
+                records[index].authToken = ""
+                migrated = true
+            }
+        }
+        if migrated {
+            writePersistedDevices(records)
+        }
 
         let devices: [KVMDevice] = records.map { record in
             KVMDevice(
@@ -717,11 +831,16 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 host: record.host,
                 port: record.port,
                 type: record.type,
-                authToken: record.authToken,
+                // Read from the Keychain when connecting.
+                authToken: "",
                 capabilities: record.capabilities
             )
         }
         availableDevices = removeDuplicates(from: devices).sorted { $0.name < $1.name }
+    }
+
+    private func credentialKey(host: String, port: Int) -> String {
+        "\(host):\(port)"
     }
 
     private func savedDeviceId(host: String, port: Int) -> String {
@@ -894,6 +1013,8 @@ enum KVMError: Error, LocalizedError {
     case authenticationFailed
     case unsupportedCapability
     case networkUnavailable
+    case passwordRejected
+    case savedPasswordRejected
     
     var errorDescription: String? {
         switch self {
@@ -907,6 +1028,155 @@ enum KVMError: Error, LocalizedError {
             return "Device does not support this capability"
         case .networkUnavailable:
             return "Network is not available"
+        case .passwordRejected:
+            return "The password was not accepted"
+        case .savedPasswordRejected:
+            return "The saved password was not accepted"
         }
+    }
+
+    /// Errors the user resolves by entering a password.
+    var promptsForPassword: Bool {
+        switch self {
+        case .authenticationFailed, .passwordRejected, .savedPasswordRejected:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func passwordPromptMessage(deviceName: String) -> String {
+        switch self {
+        case .passwordRejected:
+            return "\(deviceName) did not accept the password. Check it and try again."
+        case .savedPasswordRejected:
+            return "\(deviceName) did not accept the saved password, so it was not tried again. Enter the current password to continue."
+        default:
+            return "Enter the password for \(deviceName)."
+        }
+    }
+}
+
+// MARK: - Keychain
+
+/// Stores device credentials as generic-password items in the macOS Keychain.
+/// Items are per device (account `host:port`), never synchronized through iCloud, and
+/// only readable after the first unlock on this Mac. Secrets are never logged.
+enum DeviceCredentialStore {
+    enum Kind: String {
+        case authToken = "auth-token"
+        case password
+
+        var service: String {
+            "\(Bundle.main.bundleIdentifier ?? "com.rcawston.Overlook").\(rawValue)"
+        }
+    }
+
+    /// The data protection keychain needs a provisioning profile (keychain access group).
+    /// Builds without one get errSecMissingEntitlement and use the login keychain instead.
+    private static let keychains = [true, false]
+
+    private static func baseQuery(_ kind: Kind, account: String?, dataProtection: Bool) -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: kind.service,
+            kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
+        ]
+        if let account {
+            query[kSecAttrAccount as String] = account
+        }
+        if dataProtection {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
+    }
+
+    static func read(_ kind: Kind, account: String) -> String? {
+        for dataProtection in keychains {
+            var query = baseQuery(kind, account: account, dataProtection: dataProtection)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) {
+                return value
+            }
+            if status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("read", kind, status)
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    static func save(_ value: String, as kind: Kind, account: String) -> Bool {
+        let data = Data(value.utf8)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+
+        for dataProtection in keychains {
+            let status = SecItemUpdate(baseQuery(kind, account: account, dataProtection: dataProtection) as CFDictionary, attributes as CFDictionary)
+            if status == errSecSuccess {
+                return true
+            }
+            if status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("update", kind, status)
+            }
+        }
+
+        for dataProtection in keychains {
+            var item = baseQuery(kind, account: account, dataProtection: dataProtection)
+            item.merge(attributes) { _, new in new }
+            item[kSecAttrLabel as String] = "Overlook \(kind == .password ? "password" : "session") for \(account)"
+
+            let status = SecItemAdd(item as CFDictionary, nil)
+            if status == errSecSuccess {
+                return true
+            }
+            if status != errSecMissingEntitlement {
+                log("add", kind, status)
+                return false
+            }
+        }
+        return false
+    }
+
+    static func delete(_ kind: Kind, account: String) {
+        for dataProtection in keychains {
+            let status = SecItemDelete(baseQuery(kind, account: account, dataProtection: dataProtection) as CFDictionary)
+            if status != errSecSuccess, status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("delete", kind, status)
+            }
+        }
+    }
+
+    /// Accounts that have an item of this kind. Reads attributes only, never secrets.
+    static func accounts(of kind: Kind) -> Set<String> {
+        var accounts: Set<String> = []
+        for dataProtection in keychains {
+            var query = baseQuery(kind, account: nil, dataProtection: dataProtection)
+            query[kSecReturnAttributes as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitAll
+
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let items = result as? [[String: Any]] {
+                for item in items {
+                    if let account = item[kSecAttrAccount as String] as? String {
+                        accounts.insert(account)
+                    }
+                }
+            } else if status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("list", kind, status)
+            }
+        }
+        return accounts
+    }
+
+    private static func log(_ operation: String, _ kind: Kind, _ status: OSStatus) {
+        NSLog("[Overlook keychain] %@ %@ failed: %@", operation, kind.rawValue, "\(status)")
     }
 }
