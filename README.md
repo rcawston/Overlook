@@ -133,6 +133,19 @@ Once connected:
 - Keyboard is captured and forwarded.
 - Standard UX flows like fullscreen work well for “monitor replacement” usage.
 
+### 4) Clean view (share only the remote screen)
+
+Press `⌃⌘C`, choose **View → Clean View**, or use the toolbar button (filled rectangle icon) to switch the focused window to clean view. The window then shows only the remote screen, edge to edge: no title bar (with its live stats), window buttons, toolbar or shadow. In a video meeting (Teams, Zoom, Meet, …), share the Overlook window and the other participants see only the remote desktop.
+
+- The video stays where it is on screen; only the window chrome is removed.
+- Press `⌃⌘C` again or choose **View → Clean View** to bring the chrome back. The window returns to its exact previous size and position.
+- The stream and session keep running; nothing reconnects.
+- Resize the window by its edges as usual; the video aspect ratio is kept.
+- The window keeps a stable, descriptive title (`Overlook – <device name>`) so you can pick it in a meeting app’s window list. The live stats return to the title when you leave clean view.
+- The corners stay rounded: macOS draws them for every window that can take keyboard input.
+- There is no title bar to drag, and clicks on the video always go to the remote. To move the window, use **Window → Center** or **Window → Move & Resize**, or leave clean view, move the window, and switch back.
+- Clean view and full screen do not mix: the toggle is unavailable in full screen, and entering full screen from clean view brings the chrome back first.
+
 ---
 
 ## OCR Copy Mode (Remote → Local)
@@ -201,6 +214,11 @@ Overlook includes a few “quality of life” shortcuts.
 
 - `⌘C`: toggles OCR selection mode (so you can “copy” from the remote screen).
 - `⌘V`: pastes macOS clipboard to the remote.
+- `⌃⌘C`: toggles clean view (handled locally, not sent to the remote).
+
+### App shortcuts
+
+- `⌃⌘C`: toggles **View → Clean View**.
 
 ### Menu bar global shortcuts
 
