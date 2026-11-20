@@ -22,6 +22,37 @@ struct OverlookApp: App {
         .windowResizability(.automatic)
         .commands {
             WindowSizeCommands()
+            CleanViewCommands()
+        }
+    }
+}
+
+struct CleanViewKey: FocusedValueKey {
+    typealias Value = Binding<Bool>
+}
+
+extension FocusedValues {
+    /// The focused window's clean-view flag. Not published while that window is in full screen.
+    var cleanView: Binding<Bool>? {
+        get { self[CleanViewKey.self] }
+        set { self[CleanViewKey.self] = newValue }
+    }
+}
+
+struct CleanViewCommands: Commands {
+    @FocusedBinding(\.cleanView) private var isCleanView: Bool?
+
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            Divider()
+            // ⌃⌘C is also intercepted by InputManager while keyboard capture is active,
+            // because the capture monitor consumes key events before menu key equivalents.
+            Toggle("Clean View", isOn: Binding(
+                get: { isCleanView ?? false },
+                set: { isCleanView = $0 }
+            ))
+            .keyboardShortcut("c", modifiers: [.command, .control])
+            .disabled(isCleanView == nil)
         }
     }
 }
