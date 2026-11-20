@@ -131,6 +131,7 @@ Once connected:
 
 - Mouse movement, clicks, dragging, and scroll are forwarded.
 - Keyboard is captured and forwarded.
+- Keys, modifiers and mouse buttons still held down are released on the remote when Overlook loses focus (another window or app, e.g. `⌘Tab`), when input capture stops (opening Settings or the connections list, turning on OCR mode), and when the connection is closed, lost or reconnected. The remote never sees a stuck `⌘`/`Ctrl` or mouse button.
 - Standard UX flows like fullscreen work well for “monitor replacement” usage.
 
 ---
