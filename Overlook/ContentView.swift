@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var selectedDevice: KVMDevice?
     @State private var isConnected = false
     @State private var isOCRModeEnabled = false
+    @State private var isCleanView = false
     @State private var isShowingOCRResult = false
     @State private var showingSettings = false
     @State private var selectedText = ""
@@ -56,6 +57,15 @@ struct ContentView: View {
 
     private var windowTitle: String {
         let device = kvmDeviceManager.connectedDevice
+
+        if isCleanView {
+            // The title is hidden in clean view, but meeting apps list windows by title.
+            // Keep it stable and descriptive instead of showing live stats.
+            if let device {
+                return "Overlook – \(device.name)"
+            }
+            return "Overlook"
+        }
 
         let deviceLabel: String
         if let device {
@@ -111,6 +121,10 @@ struct ContentView: View {
     }
     
     var body: some View {
+        sessionPresentations(sessionContent)
+    }
+
+    private var sessionContent: some View {
         ZStack(alignment: .trailing) {
             if isFullscreen {
                 VideoSurfaceView(
@@ -138,6 +152,9 @@ struct ContentView: View {
                         }
                     }
                 )
+                // Covers the hidden title bar in clean view. Without clean view the content
+                // starts below the toolbar, so there is no safe area to ignore.
+                .ignoresSafeArea()
                 .allowsHitTesting(!showingSettings)
             }
 
@@ -271,9 +288,10 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: showingConnections)
             .allowsHitTesting(showingConnections)
         }
-        .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize))
-        .background(WindowTitleSetter(title: windowTitle))
+        .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize, isCleanView: $isCleanView))
+        .background(WindowTitleSetter(title: windowTitle, isTitleHidden: isCleanView))
         .background(WindowReferenceSetter(window: $windowRef))
+        .focusedSceneValue(\.cleanView, focusedCleanViewBinding)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             applyAppAppearance()
@@ -331,9 +349,16 @@ struct ContentView: View {
                 isOCRModeEnabled.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .overlookToggleCleanView)) { note in
+            toggleCleanViewFromShortcut(note)
+        }
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
+    }
+
+    private func sessionPresentations(_ content: some View) -> some View {
+        content
         .sheet(isPresented: $isShowingOCRResult) {
             OCRResultView(selectedText: $selectedText)
         }
@@ -379,33 +404,59 @@ struct ContentView: View {
             Text(connectionErrorMessage ?? "")
         }
         .toolbar {
-            if isFullscreen == false {
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: { showingConnections.toggle() }) {
-                        Image(systemName: "personalhotspot")
-                    }
-                    .help("Connections")
+            windowToolbar
+        }
+    }
 
-                    Button(action: { fitWindowToGuest() }) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(webRTCManager.videoSize == nil)
-                    .help("Fit window to guest")
-
-                    Button(action: { toggleOCR() }) {
-                        Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
-                    }
-                    .disabled(!isConnected)
-                    .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
-
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .disabled(!isConnected)
-                    .help("Settings")
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        if isFullscreen == false {
+            ToolbarItemGroup(placement: .automatic) {
+                Button(action: { showingConnections.toggle() }) {
+                    Image(systemName: "personalhotspot")
                 }
+                .help("Connections")
+
+                Button(action: { fitWindowToGuest() }) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .disabled(webRTCManager.videoSize == nil)
+                .help("Fit window to guest")
+
+                Button(action: { toggleOCR() }) {
+                    Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
+                }
+                .disabled(!isConnected)
+                .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                cleanViewButton
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
+                    Image(systemName: "gearshape")
+                }
+                .disabled(!isConnected)
+                .help("Settings")
             }
         }
+    }
+
+    private var cleanViewButton: some View {
+        Button(action: { isCleanView = true }) {
+            Image(systemName: "rectangle.inset.filled")
+        }
+        .help("Clean View (⌃⌘C)")
+    }
+
+    /// Handles ⌃⌘C intercepted during keyboard capture for this window.
+    private func toggleCleanViewFromShortcut(_ note: Notification) {
+        if let window = note.object as? NSWindow, windowRef !== window { return }
+        guard !isFullscreen else { return }
+        isCleanView.toggle()
+    }
+
+    /// Not published in full screen, so the View menu item is disabled there.
+    private var focusedCleanViewBinding: Binding<Bool>? {
+        isFullscreen ? nil : $isCleanView
     }
 
     private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
@@ -610,6 +661,7 @@ private struct WindowReferenceSetter: NSViewRepresentable {
 
 private struct WindowAspectRatioSetter: NSViewRepresentable {
     let videoSize: CGSize?
+    @Binding var isCleanView: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -629,6 +681,26 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
                 window.titlebarAppearsTransparent = false
                 window.styleMask.remove(.fullSizeContentView)
                 coordinator.attach(to: window)
+            }
+        }
+
+        context.coordinator.cleanViewBinding = $isCleanView
+        if context.coordinator.isCleanViewApplied != isCleanView {
+            let coordinator = context.coordinator
+            let requested = isCleanView
+            // Read the frame now: SwiftUI can still adjust the window size for this update
+            // before the deferred change runs.
+            let frame = window.frame
+            DispatchQueue.main.async {
+                if requested {
+                    coordinator.enterCleanView(window: window, frameBeforeChange: frame)
+                } else {
+                    coordinator.exitCleanView(window: window, restoreFrame: true)
+                }
+                // Clean view is refused in full screen; keep the toggle in sync with the window.
+                if coordinator.isCleanViewApplied != requested {
+                    coordinator.cleanViewBinding?.wrappedValue = coordinator.isCleanViewApplied
+                }
             }
         }
 
@@ -657,7 +729,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             context.coordinator.didInitialResizeForAspect = true
 
             let currentFrame = window.frame
-            let currentLayout = window.contentLayoutRect.size
+            let currentLayout = context.coordinator.videoLayoutSize(of: window)
             let deltaH = currentFrame.size.height - currentLayout.height
 
             if currentLayout.width > 0 {
@@ -686,6 +758,29 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
         private var storedWindowedStyleMaskHadFullSizeContentView: Bool?
         private var storedWindowedTitleVisibility: NSWindow.TitleVisibility?
         private var storedWindowedToolbarIsVisible: Bool?
+
+        /// Window state saved when entering clean view, restored exactly when leaving it.
+        private struct CleanViewRestoreState {
+            let frame: NSRect
+            let styleMaskHadFullSizeContentView: Bool
+            let titlebarAppearsTransparent: Bool
+            let titleVisibility: NSWindow.TitleVisibility
+            let toolbarIsVisible: Bool?
+            let hasShadow: Bool
+            let videoAspect: Double?
+        }
+
+        private var cleanViewRestoreState: CleanViewRestoreState?
+        var cleanViewBinding: Binding<Bool>?
+
+        var isCleanViewApplied: Bool {
+            cleanViewRestoreState != nil
+        }
+
+        /// The window area used by the video. In clean view it includes the hidden title bar.
+        func videoLayoutSize(of window: NSWindow) -> NSSize {
+            isCleanViewApplied ? window.frame.size : window.contentLayoutRect.size
+        }
 
         func attach(to window: NSWindow) {
             if self.window === window {
@@ -736,11 +831,81 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             }
         }
 
+        /// Clean view hides all window chrome so only the video is visible: title bar, title,
+        /// traffic lights, toolbar and shadow. The window keeps its title bar style bit so it
+        /// can still become key, stays resizable by its edges, and keeps the video at the same
+        /// place on screen. Only window properties change, so the stream and session are
+        /// untouched. Leaving clean view restores the saved chrome and frame.
+        func enterCleanView(window: NSWindow, frameBeforeChange: NSRect) {
+            guard cleanViewRestoreState == nil,
+                  window.styleMask.contains(.fullScreen) == false else { return }
+
+            let layout = window.contentLayoutRect
+            let videoFrame = NSRect(
+                x: frameBeforeChange.minX + layout.minX,
+                y: frameBeforeChange.minY + layout.minY,
+                width: frameBeforeChange.width - (window.frame.width - layout.width),
+                height: frameBeforeChange.height - (window.frame.height - layout.height)
+            )
+
+            cleanViewRestoreState = CleanViewRestoreState(
+                frame: frameBeforeChange,
+                styleMaskHadFullSizeContentView: window.styleMask.contains(.fullSizeContentView),
+                titlebarAppearsTransparent: window.titlebarAppearsTransparent,
+                titleVisibility: window.titleVisibility,
+                toolbarIsVisible: window.toolbar?.isVisible,
+                hasShadow: window.hasShadow,
+                videoAspect: videoAspect
+            )
+
+            window.toolbar?.isVisible = false
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.styleMask.insert(.fullSizeContentView)
+            if #available(macOS 11.0, *) {
+                window.titlebarSeparatorStyle = .none
+            }
+            setStandardWindowButtonsHidden(true, window: window)
+            window.hasShadow = false
+            window.setFrame(videoFrame, display: true)
+        }
+
+        func exitCleanView(window: NSWindow, restoreFrame: Bool) {
+            guard let state = cleanViewRestoreState else { return }
+            cleanViewRestoreState = nil
+
+            window.hasShadow = state.hasShadow
+            setStandardWindowButtonsHidden(false, window: window)
+            if state.styleMaskHadFullSizeContentView == false {
+                window.styleMask.remove(.fullSizeContentView)
+            }
+            window.titleVisibility = state.titleVisibility
+            window.titlebarAppearsTransparent = state.titlebarAppearsTransparent
+            if #available(macOS 11.0, *) {
+                window.titlebarSeparatorStyle = .automatic
+            }
+            if let visible = state.toolbarIsVisible {
+                window.toolbar?.isVisible = visible
+            }
+            guard restoreFrame else { return }
+            window.setFrame(state.frame, display: true)
+
+            if videoAspect != state.videoAspect {
+                adjustFrameToVideoAspect(window: window)
+            }
+        }
+
+        private func setStandardWindowButtonsHidden(_ hidden: Bool, window: NSWindow) {
+            for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+                window.standardWindowButton(type)?.isHidden = hidden
+            }
+        }
+
         private func adjustFrameToVideoAspect(window: NSWindow) {
             guard let aspect = videoAspect, aspect.isFinite, aspect > 0 else { return }
 
             let currentFrame = window.frame
-            let currentLayout = window.contentLayoutRect.size
+            let currentLayout = videoLayoutSize(of: window)
 
             let deltaH = currentFrame.size.height - currentLayout.height
 
@@ -773,7 +938,7 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
         guard let aspect = videoAspect else { return frameSize }
 
         let currentFrame = sender.frame.size
-        let currentLayout = sender.contentLayoutRect.size
+        let currentLayout = videoLayoutSize(of: sender)
 
         let deltaW = currentFrame.width - currentLayout.width
         let deltaH = currentFrame.height - currentLayout.height
@@ -803,6 +968,16 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
         return constrained
     }
 
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        // Full screen can still be requested from the View menu while in clean view. Bring the
+        // chrome back first; macOS restores the window frame when full screen ends.
+        if let window = notification.object as? NSWindow, isCleanViewApplied {
+            exitCleanView(window: window, restoreFrame: false)
+            cleanViewBinding?.wrappedValue = false
+        }
+        forwardedDelegate?.windowWillEnterFullScreen?(notification)
+    }
+
     func windowDidEnterFullScreen(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else {
             forwardedDelegate?.windowDidEnterFullScreen?(notification)
@@ -830,6 +1005,7 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
 
 private struct WindowTitleSetter: NSViewRepresentable {
     let title: String
+    let isTitleHidden: Bool
 
     func makeNSView(context: Context) -> NSView {
         NSView(frame: .zero)
@@ -841,7 +1017,7 @@ private struct WindowTitleSetter: NSViewRepresentable {
             if window.title != title {
                 window.title = title
             }
-            if window.styleMask.contains(.fullScreen) == false {
+            if window.styleMask.contains(.fullScreen) == false, isTitleHidden == false {
                 window.titleVisibility = .visible
             }
         }

@@ -6,6 +6,8 @@ import SwiftUI
 
 extension Notification.Name {
     static let overlookToggleCopyMode = Notification.Name("overlook.toggleCopyMode")
+    /// Posted with the event's window as object when ⌃⌘C is pressed during keyboard capture.
+    static let overlookToggleCleanView = Notification.Name("overlook.toggleCleanView")
 }
 
 @MainActor
@@ -285,6 +287,15 @@ class InputManager: ObservableObject {
             }
 
             if isKeyDown, modifiers.contains(.command) {
+                if keyCode == 8,
+                   modifiers.intersection([.command, .shift, .option, .control]) == [.command, .control] {
+                    // ⌃⌘C toggles clean view locally. Control was already forwarded as a
+                    // modifier press and is released normally when the user lets go of it.
+                    prepareForLocalCommandShortcut()
+                    suppressedKeyUps.insert(keyCode)
+                    NotificationCenter.default.post(name: .overlookToggleCleanView, object: event.window)
+                    return
+                }
                 if keyCode == 8 {
                     prepareForLocalCommandShortcut()
                     suppressedKeyUps.insert(keyCode)

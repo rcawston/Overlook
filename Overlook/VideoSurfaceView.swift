@@ -301,6 +301,12 @@ final class TrackingContainerView: NSView {
         self
     }
 
+    /// Clicks on the video always go to the remote, also where the video lies under the
+    /// hidden title bar in clean view, instead of moving the window.
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.acceptsMouseMovedEvents = true
