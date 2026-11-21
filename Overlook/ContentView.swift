@@ -123,6 +123,10 @@ struct ContentView: View {
     }
     
     var body: some View {
+        sessionPresentations(sessionContent)
+    }
+
+    private var sessionContent: some View {
         ZStack(alignment: .trailing) {
             if isFullscreen {
                 VideoSurfaceView(
@@ -289,7 +293,7 @@ struct ContentView: View {
         .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize, isCleanView: $isCleanView))
         .background(WindowTitleSetter(title: windowTitle, isTitleHidden: isCleanView))
         .background(WindowReferenceSetter(window: $windowRef))
-        .focusedSceneValue(\.cleanView, isFullscreen ? nil : $isCleanView)
+        .focusedSceneValue(\.cleanView, focusedCleanViewBinding)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             applyAppAppearance()
@@ -356,13 +360,15 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .overlookToggleCleanView)) { note in
-            if let window = note.object as? NSWindow, windowRef !== window { return }
-            guard !isFullscreen else { return }
-            isCleanView.toggle()
+            toggleCleanViewFromShortcut(note)
         }
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
+    }
+
+    private func sessionPresentations(_ content: some View) -> some View {
+        content
         .sheet(isPresented: $isShowingOCRResult) {
             OCRResultView(selectedText: $selectedText)
         }
@@ -421,38 +427,59 @@ struct ContentView: View {
             Text(connectionErrorMessage ?? "")
         }
         .toolbar {
-            if isFullscreen == false {
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: { showingConnections.toggle() }) {
-                        Image(systemName: "personalhotspot")
-                    }
-                    .help("Connections")
+            windowToolbar
+        }
+    }
 
-                    Button(action: { fitWindowToGuest() }) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(webRTCManager.videoSize == nil)
-                    .help("Fit window to guest")
-
-                    Button(action: { toggleOCR() }) {
-                        Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
-                    }
-                    .disabled(!isConnected)
-                    .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
-
-                    Button(action: { isCleanView = true }) {
-                        Image(systemName: "rectangle.inset.filled")
-                    }
-                    .help("Clean View (⌃⌘C)")
-
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .disabled(!isConnected)
-                    .help("Settings")
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        if isFullscreen == false {
+            ToolbarItemGroup(placement: .automatic) {
+                Button(action: { showingConnections.toggle() }) {
+                    Image(systemName: "personalhotspot")
                 }
+                .help("Connections")
+
+                Button(action: { fitWindowToGuest() }) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .disabled(webRTCManager.videoSize == nil)
+                .help("Fit window to guest")
+
+                Button(action: { toggleOCR() }) {
+                    Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
+                }
+                .disabled(!isConnected)
+                .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                cleanViewButton
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
+                    Image(systemName: "gearshape")
+                }
+                .disabled(!isConnected)
+                .help("Settings")
             }
         }
+    }
+
+    private var cleanViewButton: some View {
+        Button(action: { isCleanView = true }) {
+            Image(systemName: "rectangle.inset.filled")
+        }
+        .help("Clean View (⌃⌘C)")
+    }
+
+    /// Handles ⌃⌘C intercepted during keyboard capture for this window.
+    private func toggleCleanViewFromShortcut(_ note: Notification) {
+        if let window = note.object as? NSWindow, windowRef !== window { return }
+        guard !isFullscreen else { return }
+        isCleanView.toggle()
+    }
+
+    /// Not published in full screen, so the View menu item is disabled there.
+    private var focusedCleanViewBinding: Binding<Bool>? {
+        isFullscreen ? nil : $isCleanView
     }
 
     private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
