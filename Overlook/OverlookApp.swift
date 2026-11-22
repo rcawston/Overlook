@@ -49,7 +49,11 @@ struct InputModeCommands: Commands {
             // because the capture monitor consumes key events before menu key equivalents.
             Toggle("View Only", isOn: Binding(
                 get: { isViewOnly ?? false },
-                set: { isViewOnly = $0 }
+                set: { newValue in
+                    // Holding ⌘⇧M must not flip the mode back and forth.
+                    if let event = NSApp.currentEvent, event.type == .keyDown, event.isARepeat { return }
+                    isViewOnly = newValue
+                }
             ))
             .keyboardShortcut("m", modifiers: [.command, .shift])
             .disabled(isViewOnly == nil)

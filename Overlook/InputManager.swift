@@ -59,7 +59,6 @@ class InputManager: ObservableObject {
     /// View-only gate: while set, keyboard and mouse capture cannot start, so no input
     /// reaches the remote, whichever path tries to start capture.
     @Published private(set) var isViewOnly = false
-    private var viewOnlySessionEndpoint: String?
     @Published var isMouseCaptureEnabled = false
     /// Set once when a paste could not be delivered. The paste is never retried automatically.
     @Published var pasteErrorMessage: String?
@@ -105,6 +104,11 @@ class InputManager: ObservableObject {
         mouseModeRefreshTask?.cancel()
         mouseModeRefreshTask = nil
         glkvmClient = client
+        if isNewClient {
+            // A new client only comes from a connect or disconnect: every session starts in
+            // Control mode. Callers start capture after setting the client.
+            isViewOnly = false
+        }
         isGLKVMAbsoluteMouseMode = true
         pendingAbsoluteMouseMove = nil
         pendingRelativeMouseMove = nil
@@ -345,15 +349,6 @@ class InputManager: ObservableObject {
         return true
     }
     
-    /// Records the host and port of the connected device, or nil when disconnected. Returns
-    /// true when the session changed (connect, disconnect or another device), in which case
-    /// view-only resets to Control. Updates to the same device's settings return false.
-    func updateViewOnlySession(endpoint: String?) -> Bool {
-        guard viewOnlySessionEndpoint != endpoint else { return false }
-        viewOnlySessionEndpoint = endpoint
-        return true
-    }
-
     /// Entering view-only stops capture through the regular stop paths, which release held
     /// keys and buttons. Leaving it only lifts the gate; the caller resumes capture.
     func setViewOnly(_ viewOnly: Bool) {
@@ -376,9 +371,12 @@ class InputManager: ObservableObject {
         isKeyboardCaptureEnabled = true
         
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
-            self?.handleKeyEvent(event)
-            guard let self, self.isKeyboardCaptureEnabled else { return event }
-            return nil
+            guard let self else { return event }
+            // Decide before handling: a local shortcut such as ⌘⇧M stops capture while it
+            // handles its own event, which must still be consumed and not reach the menu.
+            let wasCapturing = self.isKeyboardCaptureEnabled
+            self.handleKeyEvent(event)
+            return wasCapturing ? nil : event
         }
     }
     
@@ -435,6 +433,8 @@ class InputManager: ObservableObject {
 
             if isKeyDown, modifiers.contains(.command) {
                 if isViewOnlyShortcut(event) {
+                    // Holding the shortcut must not flip the mode back and forth.
+                    guard !event.isARepeat else { return }
                     // ⌘⇧M toggles view-only mode locally. Capture stops before the key-up
                     // arrives, so the key-up is not suppressed here. Shift was already
                     // forwarded; stopping capture releases it with the other held keys.

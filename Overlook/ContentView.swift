@@ -337,18 +337,11 @@ struct ContentView: View {
                     suppressDeviceAutoConnect = true
                     selectedDevice = device
                     isConnected = true
-                    // Every new connection starts in Control mode.
-                    if inputManager.updateViewOnlySession(endpoint: "\(device.host):\(device.port)") {
-                        setViewOnly(false)
-                    }
                     DispatchQueue.main.async {
                         suppressDeviceAutoConnect = false
                     }
                 } else {
                     isConnected = false
-                    if inputManager.updateViewOnlySession(endpoint: nil) {
-                        setViewOnly(false)
-                    }
                 }
             }
         }
