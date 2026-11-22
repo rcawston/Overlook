@@ -34,6 +34,7 @@ struct WebUISettingsPanel: View {
     @State private var isVideoExpanded = true
     @State private var isRemoteExpanded = true
     @State private var isKeyboardExpanded = true
+    @State private var isRemoteKeyboardActionsExpanded = false
     @State private var isAudioExpanded = false
     @State private var isSystemExpanded = false
     @State private var isNetworkExpanded = false
@@ -601,6 +602,20 @@ struct WebUISettingsPanel: View {
                                     }
                                 }
                             }
+                        }
+                        .padding(.top, 6)
+                    }
+
+                    DisclosureGroup("Remote keyboard actions", isExpanded: $isRemoteKeyboardActionsExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(RemoteKeyboardAction.allCases) { action in
+                                RemoteKeyboardShortcutRow(action: action, isActive: isPresented)
+                            }
+
+                            Text("Applies to all devices while keyboard capture is active. Click a shortcut to record a new one; Escape cancels. Insert and Ctrl+Alt+Delete are disabled until you record a shortcut.")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.top, 6)
                     }
@@ -1295,5 +1310,134 @@ private struct NotImplementedRow: View {
         }
         .opacity(0.7)
         .allowsHitTesting(false)
+    }
+}
+
+private struct RemoteKeyboardShortcutRow: View {
+    @EnvironmentObject var inputManager: InputManager
+
+    let action: RemoteKeyboardAction
+    /// Recording stops when the settings panel is hidden.
+    let isActive: Bool
+
+    @State private var isRecording = false
+    @State private var keyMonitor: Any?
+    @State private var message: String?
+
+    private var shortcut: RemoteKeyboardShortcut? {
+        inputManager.remoteKeyboardShortcuts[action]
+    }
+
+    private var isAvailable: Bool {
+        inputManager.isRemoteKeyboardActionAvailable(action)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(action.title)
+                Spacer()
+                Button(isRecording ? "Press shortcut…" : (shortcut?.displayString ?? "Disabled")) {
+                    if isRecording {
+                        stopRecording()
+                    } else {
+                        startRecording()
+                    }
+                }
+                .frame(minWidth: 110)
+                .help("Click to record a new shortcut")
+                .accessibilityLabel("\(action.title) shortcut")
+                .accessibilityValue(isRecording ? "Recording" : (shortcut?.displayString ?? "Disabled"))
+
+                Button(action: {
+                    stopRecording()
+                    message = inputManager.setRemoteKeyboardShortcut(nil, for: action)
+                }) {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .disabled(shortcut == nil)
+                .help("Disable")
+                .accessibilityLabel("Disable \(action.title) shortcut")
+
+                if let defaultShortcut = action.defaultShortcut {
+                    Button(action: {
+                        stopRecording()
+                        message = inputManager.setRemoteKeyboardShortcut(defaultShortcut, for: action)
+                    }) {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(shortcut == defaultShortcut)
+                    .help("Reset to \(defaultShortcut.displayString)")
+                    .accessibilityLabel("Reset \(action.title) shortcut to default")
+                }
+            }
+            .disabled(!isAvailable)
+
+            if !isAvailable {
+                Text("Not available with the WebRTC input transport.")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            } else if let message {
+                Text(message)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: isAvailable) { _, available in
+            if !available {
+                stopRecording()
+            }
+        }
+        .onChange(of: isActive) { _, active in
+            if !active {
+                stopRecording()
+            }
+        }
+        .onDisappear {
+            stopRecording()
+        }
+    }
+
+    private func startRecording() {
+        guard keyMonitor == nil else { return }
+        message = nil
+        isRecording = true
+        // Capture the key press before menus and controls see it, so that app shortcuts
+        // such as ⌘Q can be recorded (and then rejected) instead of being performed.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            MainActor.assumeIsolated {
+                handleRecording(event)
+            }
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        keyMonitor = nil
+        isRecording = false
+    }
+
+    private func handleRecording(_ event: NSEvent) {
+        guard isRecording else { return }
+        if event.keyCode == 53 {
+            stopRecording()
+            return
+        }
+        guard !RemoteKeyboardShortcut.isModifierKey(event.keyCode) else { return }
+
+        let recorded = RemoteKeyboardShortcut(keyCode: event.keyCode, modifiers: event.modifierFlags)
+        if recorded.modifiers.intersection([.command, .control, .option]).isEmpty {
+            // Keep recording until a combination with Command, Control or Option is pressed.
+            message = "Use Command, Control or Option in the shortcut."
+            return
+        }
+        stopRecording()
+        message = inputManager.setRemoteKeyboardShortcut(recorded, for: action)
     }
 }

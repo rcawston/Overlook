@@ -57,6 +57,7 @@ class InputManager: ObservableObject {
     @Published var isMouseCaptureEnabled = false
     /// Set once when a paste could not be delivered. The paste is never retried automatically.
     @Published var pasteErrorMessage: String?
+    @Published private(set) var remoteKeyboardShortcuts = RemoteKeyboardShortcuts.load()
 
     enum TransportMode: String, CaseIterable {
         case webRTC
@@ -406,17 +407,28 @@ class InputManager: ObservableObject {
                 }
             }
 
+            // Auto-repeat of a key whose press was handled locally stays local. A new press
+            // means an earlier local release was missed, so its release is forwarded again.
+            if isKeyDown, suppressedKeyUps.contains(keyCode) {
+                if event.isARepeat {
+                    return
+                }
+                suppressedKeyUps.remove(keyCode)
+            }
+
+            if isKeyDown, !event.isARepeat,
+               let action = remoteKeyboardShortcuts.action(forKeyCode: keyCode, modifiers: modifiers),
+               isRemoteKeyboardActionAvailable(action) {
+                suppressedKeyUps.insert(keyCode)
+                performRemoteKeyboardAction(action)
+                return
+            }
+
             if isKeyDown, modifiers.contains(.command) {
                 if keyCode == 8 {
                     prepareForLocalCommandShortcut()
                     suppressedKeyUps.insert(keyCode)
                     NotificationCenter.default.post(name: .overlookToggleCopyMode, object: nil)
-                    return
-                }
-                if keyCode == 9 {
-                    prepareForLocalCommandShortcut()
-                    suppressedKeyUps.insert(keyCode)
-                    pasteClipboardToRemote()
                     return
                 }
 
@@ -512,6 +524,73 @@ class InputManager: ObservableObject {
         pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
         activeCommandKeyCode = nil
         commandKeySentToRemote = false
+    }
+
+    /// Saves and applies a new shortcut. Returns why it was rejected, or `nil` on success.
+    @discardableResult
+    func setRemoteKeyboardShortcut(_ shortcut: RemoteKeyboardShortcut?, for action: RemoteKeyboardAction) -> String? {
+        if let shortcut, let error = remoteKeyboardShortcuts.validationError(for: shortcut, action: action) {
+            return error
+        }
+        var updated = remoteKeyboardShortcuts
+        updated.set(shortcut, for: action)
+        updated.save()
+        remoteKeyboardShortcuts = updated
+        return nil
+    }
+
+    /// Key actions are sent over the GLKVM HID WebSocket only; with the WebRTC transport their
+    /// shortcuts are not matched and the keys are forwarded as usual. Paste works with both.
+    func isRemoteKeyboardActionAvailable(_ action: RemoteKeyboardAction) -> Bool {
+        action.remoteKeys.isEmpty || transportMode == .glkvmWebSocket
+    }
+
+    private static let shiftControlOptionKeyCodes: Set<UInt16> = [56, 60, 59, 62, 58, 61]
+
+    private func performRemoteKeyboardAction(_ action: RemoteKeyboardAction) {
+        // The shortcut's modifiers may already be held on the remote (Command first, then the
+        // others in reverse press order). Release them before the action, so that the remote
+        // only receives the action itself and their later local release is not sent again.
+        var heldModifiers: [UInt16] = []
+        if commandKeySentToRemote, let code = activeCommandKeyCode {
+            heldModifiers.append(code)
+        }
+        heldModifiers += heldKeyCodes.filter { Self.shiftControlOptionKeyCodes.contains($0) }.reversed()
+        pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
+        activeCommandKeyCode = nil
+        commandKeySentToRemote = false
+
+        if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
+            // Update the tracking now and send the releases and the action from one task, so
+            // that their order on the WebSocket is fixed.
+            for keyCode in heldModifiers {
+                trackKey(keyCode, isDown: false)
+            }
+            let releases = heldModifiers.compactMap { glkvmKeyForMacKeyCode($0) }
+            let actionKeys = action.remoteKeys
+            Task {
+                for key in releases {
+                    try? await ws.sendHidKey(key: key, state: false)
+                }
+                // Press the keys as one combination and always release all of them, even if
+                // a press could not be sent.
+                for key in actionKeys {
+                    try? await ws.sendHidKey(key: key, state: true)
+                }
+                for key in actionKeys.reversed() {
+                    try? await ws.sendHidKey(key: key, state: false)
+                }
+            }
+        } else {
+            let timestamp = CACurrentMediaTime()
+            for keyCode in heldModifiers {
+                sendKeyEvent(KeyEvent(keyCode: keyCode, isKeyDown: false, modifiers: [], timestamp: timestamp))
+            }
+        }
+
+        if action == .paste {
+            pasteClipboardToRemote()
+        }
     }
 
     private func clearPendingCommandKey() {

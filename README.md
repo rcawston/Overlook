@@ -38,7 +38,7 @@ This is especially useful for:
 
 ### 2) Paste to the remote machine with `⌘V`
 
-Overlook intercepts `⌘V` while input capture is enabled and sends the macOS clipboard to the remote via the device’s HID “print text” API.
+Overlook intercepts `⌘V` (configurable, see [Remote keyboard actions](#remote-keyboard-actions)) while input capture is enabled and sends the macOS clipboard to the remote via the device’s HID “print text” API.
 
 This replaces the old “Paste to Remote” settings UI: the workflow is now the shortcut you already expect.
 
@@ -214,7 +214,22 @@ Overlook includes a few “quality of life” shortcuts.
 ### In-session shortcuts (while keyboard capture is enabled)
 
 - `⌘C`: toggles OCR selection mode (so you can “copy” from the remote screen).
-- `⌘V`: pastes macOS clipboard to the remote.
+- `⌘V`: pastes macOS clipboard to the remote (configurable, see below).
+- **Insert** and **Ctrl+Alt+Delete**: no shortcut by default; record one in Settings (see below).
+
+### Remote keyboard actions
+
+Some keys cannot be typed on a Mac keyboard, or macOS intercepts them. Overlook can send them from a local shortcut instead:
+
+| Action | Default | Sends |
+| --- | --- | --- |
+| Insert | Disabled | `Insert` |
+| Ctrl+Alt+Delete | Disabled | `Ctrl+Alt+Delete` as one combination |
+| Paste clipboard as text | `⌘V` | The clipboard, typed via the device’s HID text API |
+
+Configure them in **Settings → Remote keyboard actions**. They apply to all devices. Click a shortcut and press a new combination with `⌘`, `⌃` or `⌥` (`Escape` cancels). Each action can be disabled, and paste can be reset to `⌘V`. Insert and Ctrl+Alt+Delete are disabled by default so that no combination that already reaches the remote (such as `⌘=`) is taken away; pick one the remote does not need, for example `⌘` + the key left of Backspace (`=` on US, `´` on German keyboards) for Insert. Shortcuts are matched by physical key, so they work on any keyboard layout. Insert and Ctrl+Alt+Delete need the GLKVM HID WebSocket transport (the default). Combinations used by another action, `⌘C` (OCR), app shortcuts (`⌘Q`, `⌘W`, `⌘,`, `⌘H`, `⌘M`) and the menu bar’s global shortcuts are rejected. Changes are saved and apply immediately.
+
+The actions only apply while keyboard capture is active for the video. A matched shortcut is handled locally and its keys are not forwarded; the remote first receives a release for the shortcut’s modifiers, then the action’s keys are pressed and always released. All other keys are forwarded as before.
 
 ### Menu bar global shortcuts
 
@@ -301,7 +316,9 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
   - Optional audio/mic track.
 - `Overlook/InputManager.swift`
   - Keyboard/mouse capture.
-  - Local→remote paste (`⌘V`).
+  - Local→remote paste and remote keyboard actions (Insert, Ctrl+Alt+Delete).
+- `Overlook/RemoteKeyboardShortcuts.swift`
+  - Remote keyboard actions, their configurable shortcuts and validation.
   - HID transport via WebSocket to the device.
 - `Overlook/OCRManager.swift` + `Overlook/OCRViews.swift`
   - Apple Vision OCR pipeline.
