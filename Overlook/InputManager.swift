@@ -548,19 +548,30 @@ class InputManager: ObservableObject {
     private static let shiftControlOptionKeyCodes: Set<UInt16> = [56, 60, 59, 62, 58, 61]
 
     private func performRemoteKeyboardAction(_ action: RemoteKeyboardAction) {
-        // The shortcut's modifiers may already be held on the remote. Release them through the
-        // tracked path first, so that the remote only receives the action itself and their
-        // later local release is not sent again.
-        prepareForLocalCommandShortcut()
-        let heldModifiers = heldKeyCodes.filter { Self.shiftControlOptionKeyCodes.contains($0) }
-        let timestamp = CACurrentMediaTime()
-        for keyCode in heldModifiers.reversed() {
-            sendKeyEvent(KeyEvent(keyCode: keyCode, isKeyDown: false, modifiers: [], timestamp: timestamp))
+        // The shortcut's modifiers may already be held on the remote (Command first, then the
+        // others in reverse press order). Release them before the action, so that the remote
+        // only receives the action itself and their later local release is not sent again.
+        var heldModifiers: [UInt16] = []
+        if commandKeySentToRemote, let code = activeCommandKeyCode {
+            heldModifiers.append(code)
         }
+        heldModifiers += heldKeyCodes.filter { Self.shiftControlOptionKeyCodes.contains($0) }.reversed()
+        pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
+        activeCommandKeyCode = nil
+        commandKeySentToRemote = false
 
-        let actionKeys = action.remoteKeys
-        if !actionKeys.isEmpty, transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
+        if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
+            // Update the tracking now and send the releases and the action from one task, so
+            // that their order on the WebSocket is fixed.
+            for keyCode in heldModifiers {
+                trackKey(keyCode, isDown: false)
+            }
+            let releases = heldModifiers.compactMap { glkvmKeyForMacKeyCode($0) }
+            let actionKeys = action.remoteKeys
             Task {
+                for key in releases {
+                    try? await ws.sendHidKey(key: key, state: false)
+                }
                 // Press the keys as one combination and always release all of them, even if
                 // a press could not be sent.
                 for key in actionKeys {
@@ -569,6 +580,11 @@ class InputManager: ObservableObject {
                 for key in actionKeys.reversed() {
                     try? await ws.sendHidKey(key: key, state: false)
                 }
+            }
+        } else {
+            let timestamp = CACurrentMediaTime()
+            for keyCode in heldModifiers {
+                sendKeyEvent(KeyEvent(keyCode: keyCode, isKeyDown: false, modifiers: [], timestamp: timestamp))
             }
         }
 
