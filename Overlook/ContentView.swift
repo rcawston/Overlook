@@ -11,7 +11,6 @@ struct ContentView: View {
     @State private var selectedDevice: KVMDevice?
     @State private var isConnected = false
     @State private var isOCRModeEnabled = false
-    @State private var isViewOnly = false
     @State private var isShowingOCRResult = false
     @State private var showingSettings = false
     @State private var selectedText = ""
@@ -308,9 +307,6 @@ struct ContentView: View {
         .onChange(of: inputManager.pasteErrorMessage) { _, _ in
             updateInputCaptureForUIOverlays()
         }
-        .onChange(of: isViewOnly) { _, viewOnly in
-            applyViewOnlyMode(viewOnly)
-        }
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
             showFullscreenControls = false
@@ -342,13 +338,17 @@ struct ContentView: View {
                     selectedDevice = device
                     isConnected = true
                     // Every new connection starts in Control mode.
-                    isViewOnly = false
+                    if inputManager.updateViewOnlySession(endpoint: "\(device.host):\(device.port)") {
+                        setViewOnly(false)
+                    }
                     DispatchQueue.main.async {
                         suppressDeviceAutoConnect = false
                     }
                 } else {
                     isConnected = false
-                    isViewOnly = false
+                    if inputManager.updateViewOnlySession(endpoint: nil) {
+                        setViewOnly(false)
+                    }
                 }
             }
         }
@@ -360,7 +360,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .overlookToggleViewOnly)) { note in
             if let window = note.object as? NSWindow, windowRef !== window { return }
             guard isConnected else { return }
-            isViewOnly.toggle()
+            setViewOnly(!isViewOnly)
         }
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
@@ -464,7 +464,7 @@ struct ContentView: View {
     }
 
     private var viewOnlyToggleButton: some View {
-        Button(action: { isViewOnly.toggle() }) {
+        Button(action: { setViewOnly(!isViewOnly) }) {
             Image(systemName: isViewOnly ? "eye" : "computermouse")
         }
         .disabled(!isConnected)
@@ -473,7 +473,13 @@ struct ContentView: View {
 
     /// Published to the View menu only while connected, so the menu item is disabled otherwise.
     private var focusedViewOnlyBinding: Binding<Bool>? {
-        isConnected ? $isViewOnly : nil
+        guard isConnected else { return nil }
+        return Binding(get: { inputManager.isViewOnly }, set: { setViewOnly($0) })
+    }
+
+    /// The view-only gate lives in the shared InputManager.
+    private var isViewOnly: Bool {
+        inputManager.isViewOnly
     }
 
     private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
@@ -617,17 +623,15 @@ struct ContentView: View {
         window.setFrame(newFrame, display: true, animate: true)
     }
 
-    /// View-only mode stops keyboard and mouse capture through the regular stop paths, so no
-    /// keyboard, mouse, scroll or paste input reaches the remote. Control mode resumes it,
-    /// unless a settings or connections overlay currently pauses capture.
+    /// View-only mode closes InputManager's gate, which stops keyboard and mouse capture
+    /// through the regular stop paths, so no keyboard, mouse, scroll or paste input reaches
+    /// the remote. Control mode resumes capture, unless an overlay currently pauses it.
     @MainActor
-    private func applyViewOnlyMode(_ viewOnly: Bool) {
-        if viewOnly {
-            inputManager.stopFullInputCapture()
-            return
-        }
+    private func setViewOnly(_ viewOnly: Bool) {
+        guard inputManager.isViewOnly != viewOnly else { return }
+        inputManager.setViewOnly(viewOnly)
 
-        guard isConnected else { return }
+        guard !viewOnly, isConnected else { return }
 
         if isInputCapturePausedForUI {
             pausedCaptureKeyboardWasEnabled = true
