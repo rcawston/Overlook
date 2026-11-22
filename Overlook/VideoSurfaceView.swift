@@ -159,6 +159,8 @@ struct VideoSurfaceView: View {
     private func setOCRMode(_ enabled: Bool) {
         webRTCManager.setFrameCaptureEnabled(enabled)
         if enabled {
+            // OCR mode stops forwarding mouse events, so a button held now would never be released.
+            inputManager.releaseHeldInput()
             ocrRegionsTask?.cancel()
             ocrRegionsTask = Task { @MainActor in
                 while !Task.isCancelled && isOCRModeEnabled {
