@@ -57,6 +57,14 @@ class MenuBarAgent: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
 
+        kvmDeviceManager.$savedPasswordDeviceKeys
+            .dropFirst()
+            .sink { [weak self] _ in
+                // Published before the value changes; rebuild once it has.
+                DispatchQueue.main.async { self?.updateDeviceMenu() }
+            }
+            .store(in: &cancellables)
+
         kvmDeviceManager.$connectedDevice
             .sink { [weak self] device in
                 guard let self else { return }
@@ -198,6 +206,23 @@ class MenuBarAgent: NSObject, ObservableObject {
         forgetItem.submenu = forgetMenu
         deviceMenu.addItem(forgetItem)
 
+        // Forget passwords saved in the Keychain
+        let passwordDevices = savedDevices.filter { kvmDeviceManager.hasSavedPassword(for: $0) }
+        let forgetPasswordItem = NSMenuItem(title: "Forget Saved Password", action: nil, keyEquivalent: "")
+        let forgetPasswordMenu = NSMenu()
+        if passwordDevices.isEmpty {
+            forgetPasswordMenu.addItem(NSMenuItem(title: "No saved passwords", action: nil, keyEquivalent: ""))
+        } else {
+            for device in passwordDevices {
+                let item = NSMenuItem(title: device.name, action: #selector(forgetSavedPassword(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = device
+                forgetPasswordMenu.addItem(item)
+            }
+        }
+        forgetPasswordItem.submenu = forgetPasswordMenu
+        deviceMenu.addItem(forgetPasswordItem)
+
         // Remove manual devices
         let manualDevices = availableDevices.filter { $0.id.hasPrefix("manual-") }
         let removeItem = NSMenuItem(title: "Remove Manual Device", action: nil, keyEquivalent: "")
@@ -249,23 +274,34 @@ class MenuBarAgent: NSObject, ObservableObject {
         }
     }
 
-    private func promptForPassword(deviceName: String) -> String? {
+    private func promptForPassword(message: String, prefill: String?, rememberByDefault: Bool) -> (password: String, remember: Bool)? {
         let alert = NSAlert()
         alert.messageText = "Password Required"
-        alert.informativeText = "Enter password for \(deviceName)"
+        alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Connect")
         alert.addButton(withTitle: "Cancel")
 
-        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 22))
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 50))
+
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 28, width: 260, height: 22))
         passwordField.placeholderString = "Password"
-        alert.accessoryView = passwordField
+        passwordField.stringValue = prefill ?? ""
+
+        let rememberCheckbox = NSButton(checkboxWithTitle: "Remember password in Keychain", target: nil, action: nil)
+        rememberCheckbox.frame = NSRect(x: 0, y: 0, width: 260, height: 20)
+        rememberCheckbox.state = rememberByDefault ? .on : .off
+
+        view.addSubview(passwordField)
+        view.addSubview(rememberCheckbox)
+        alert.accessoryView = view
+        alert.window.initialFirstResponder = passwordField
 
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else { return nil }
 
         let pw = passwordField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return pw.isEmpty ? nil : pw
+        return pw.isEmpty ? nil : (pw, rememberCheckbox.state == .on)
     }
 
     private func showError(title: String, message: String) {
@@ -329,22 +365,27 @@ class MenuBarAgent: NSObject, ObservableObject {
     private func connectSession(to device: KVMDevice) async {
         showMainWindow()
 
-        do {
-            let connected = try await kvmDeviceManager.connectToDevice(device)
-            await finishSessionConnect(connected)
-        } catch {
-            if let kvmError = error as? KVMError, kvmError == .authenticationFailed {
-                guard let password = promptForPassword(deviceName: device.name) else { return }
-                do {
-                    let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
-                    await finishSessionConnect(connected)
-                } catch {
-                    showError(title: "Failed to connect", message: String(describing: error))
-                }
-                return
+        var password: String?
+        var rememberPassword: Bool?
+        while true {
+            do {
+                let connected = try await kvmDeviceManager.connectToDevice(device, password: password, rememberPassword: rememberPassword)
+                await finishSessionConnect(connected)
+            } catch let kvmError as KVMError where kvmError.promptsForPassword {
+                // Prefill only; the password is sent when the user clicks Connect.
+                let savedPassword = kvmError == .passwordRejected ? nil : await kvmDeviceManager.savedPassword(for: device)
+                guard let entry = promptForPassword(
+                    message: kvmError.passwordPromptMessage(for: device, prefilled: savedPassword != nil),
+                    prefill: savedPassword,
+                    rememberByDefault: kvmDeviceManager.hasSavedPassword(for: device)
+                ) else { return }
+                password = entry.password
+                rememberPassword = entry.remember
+                continue
+            } catch {
+                showError(title: "Failed to connect", message: String(describing: error))
             }
-
-            showError(title: "Failed to connect", message: String(describing: error))
+            return
         }
     }
 
@@ -516,6 +557,11 @@ class MenuBarAgent: NSObject, ObservableObject {
             return
         }
         kvmDeviceManager.forgetDevice(device)
+    }
+
+    @objc private func forgetSavedPassword(_ sender: NSMenuItem) {
+        guard let device = sender.representedObject as? KVMDevice else { return }
+        kvmDeviceManager.forgetSavedPassword(for: device)
     }
 
     @objc private func removeManualDevice(_ sender: NSMenuItem) {

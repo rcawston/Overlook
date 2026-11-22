@@ -128,9 +128,21 @@ If authentication fails, you’ll be prompted for a password and Overlook will a
 #### Where the session token is stored
 
 Overlook keeps each saved device’s session token in the macOS Keychain, not in its preferences. Passwords are
-not stored. Keychain items use the service `<bundle ID>.auth-token` and the account `host:port`. They use the
+only stored if you choose to (see below). Keychain items use the service `<bundle ID>.auth-token` and the
+account `host:port`. They use the
 “after first unlock, this device only” protection class, are not synchronizable and never sync through iCloud
-Keychain. Forgetting a device deletes its token. Overlook never logs tokens.
+Keychain. Forgetting a device deletes its token. Overlook never logs tokens or passwords.
+
+#### Saved passwords (optional)
+
+The password prompt has a **Remember password in Keychain** option, off by default. When it is on and the login
+succeeds, the password is saved for that device (service `<bundle ID>.password`, same protection as the token).
+Overlook never signs in with a saved password on its own: the next time the device asks for a login, the prompt
+opens prefilled and names the address it will be sent to, and the password is only sent when you click
+**Connect**. If the device rejects it, the prompt opens again empty. Turning the option off on a successful login
+removes the saved password. To remove it at any time, select the device in **Connections** and click
+**Forget Password**, or use **Devices → Forget Saved Password** in the menu bar. Forgetting a device removes its
+token and password.
 
 Tokens saved in plain text by earlier versions are moved into the Keychain on first launch and then removed from
 the preferences (a token whose Keychain write fails stays until the next launch retries it). The saved device list
@@ -345,7 +357,7 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
 ### Security notes
 
 - The app currently allows insecure TLS for device connections (useful for devices with self-signed certs).
-- Treat your `auth_token` like a password. Overlook stores it only in the macOS Keychain.
+- Treat your `auth_token` like a password. Overlook stores it, and a password you choose to remember, only in the macOS Keychain.
 
 ---
 

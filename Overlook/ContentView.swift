@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var showingPasswordPrompt = false
     @State private var pendingPasswordDevice: KVMDevice?
     @State private var pendingPassword = ""
+    @State private var pendingPasswordMessage = ""
+    @State private var pendingRememberPassword = false
     @State private var connectionErrorMessage: String?
 
     @State private var suppressDeviceAutoConnect = false
@@ -232,6 +234,7 @@ struct ContentView: View {
                     isScanning: kvmDeviceManager.isScanning,
                     devices: kvmDeviceManager.availableDevices,
                     connectedDeviceName: kvmDeviceManager.connectedDevice?.name,
+                    selectedDeviceHasSavedPassword: selectedDevice.map { kvmDeviceManager.hasSavedPassword(for: $0) } ?? false,
                     latency: webRTCManager.latency,
                     videoSize: webRTCManager.videoSize,
                     inboundVideoKbps: webRTCManager.inboundVideoKbps,
@@ -260,6 +263,10 @@ struct ContentView: View {
                         guard device.id.hasPrefix("saved-") else { return }
                         kvmDeviceManager.forgetDevice(device)
                         selectedDevice = nil
+                    },
+                    onForgetSelectedPassword: {
+                        guard let device = selectedDevice else { return }
+                        kvmDeviceManager.forgetSavedPassword(for: device)
                     }
                 )
                 .frame(width: 360)
@@ -362,13 +369,15 @@ struct ContentView: View {
             PasswordPromptSheet(
                 isPresented: $showingPasswordPrompt,
                 password: $pendingPassword,
+                rememberPassword: $pendingRememberPassword,
+                message: pendingPasswordMessage,
                 onCancel: {
                     pendingPasswordDevice = nil
                     pendingPassword = ""
                 },
                 onConnect: {
                     if let device = pendingPasswordDevice {
-                        connectToDevice(device, password: pendingPassword)
+                        connectToDevice(device, password: pendingPassword, rememberPassword: pendingRememberPassword)
                     }
                     pendingPasswordDevice = nil
                     pendingPassword = ""
@@ -431,10 +440,10 @@ struct ContentView: View {
         }
     }
 
-    private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
+    private func connectToDevice(_ device: KVMDevice, password: String? = nil, rememberPassword: Bool? = nil) {
         Task {
             do {
-                let connectedDevice = try await kvmDeviceManager.connectToDevice(device, password: password)
+                let connectedDevice = try await kvmDeviceManager.connectToDevice(device, password: password, rememberPassword: rememberPassword)
                 await MainActor.run {
                     suppressDeviceAutoConnect = true
                     selectedDevice = connectedDevice
@@ -461,9 +470,15 @@ struct ContentView: View {
                 }
  #endif
             } catch {
-                if let kvmError = error as? KVMError, kvmError == .authenticationFailed {
+                if let kvmError = error as? KVMError, kvmError.promptsForPassword {
+                    // Prefill only; the password is sent when the user clicks Connect.
+                    let savedPassword = kvmError == .passwordRejected ? nil : await kvmDeviceManager.savedPassword(for: device)
                     await MainActor.run {
                         pendingPasswordDevice = device
+                        pendingPassword = savedPassword ?? ""
+                        pendingPasswordMessage = kvmError.passwordPromptMessage(for: device, prefilled: savedPassword != nil)
+                        // Off unless the user already chose to keep a password for this device.
+                        pendingRememberPassword = kvmDeviceManager.hasSavedPassword(for: device)
                         showingPasswordPrompt = true
                     }
                 } else {
@@ -879,6 +894,7 @@ struct ConnectionsPopoverView: View {
     let isScanning: Bool
     let devices: [KVMDevice]
     let connectedDeviceName: String?
+    let selectedDeviceHasSavedPassword: Bool
     let latency: Int
 
     let videoSize: CGSize?
@@ -900,6 +916,7 @@ struct ConnectionsPopoverView: View {
     let onManualConnect: () -> Void
     let onToggleConnection: () -> Void
     let onForgetSelectedDevice: () -> Void
+    let onForgetSelectedPassword: () -> Void
 
     var body: some View {
         let resolutionText: String = {
@@ -940,6 +957,19 @@ struct ConnectionsPopoverView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+
+            if selectedDeviceHasSavedPassword {
+                HStack {
+                    Label("Password saved in Keychain", systemImage: "key")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    Button("Forget Password") { onForgetSelectedPassword() }
+                        .controlSize(.small)
+                }
+            }
 
             HStack {
                 Button("Scan") { onScan() }
