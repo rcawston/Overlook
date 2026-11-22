@@ -477,8 +477,9 @@ struct ContentView: View {
                         pendingPasswordDevice = device
                         pendingPassword = savedPassword ?? ""
                         pendingPasswordMessage = kvmError.passwordPromptMessage(for: device, prefilled: savedPassword != nil)
-                        // Off unless the user already chose to keep a password for this device.
-                        pendingRememberPassword = kvmDeviceManager.hasSavedPassword(for: device)
+                        // Off unless the user already chose to keep a password for this device
+                        // (also after a rejected attempt, whose saved password was just removed).
+                        pendingRememberPassword = rememberPassword ?? kvmDeviceManager.hasSavedPassword(for: device)
                         showingPasswordPrompt = true
                     }
                 } else {

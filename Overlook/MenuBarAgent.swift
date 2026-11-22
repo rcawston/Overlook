@@ -362,10 +362,10 @@ class MenuBarAgent: NSObject, ObservableObject {
         Task { await connectSession(to: device) }
     }
 
-    private func connectSession(to device: KVMDevice) async {
+    private func connectSession(to device: KVMDevice, password: String? = nil) async {
         showMainWindow()
 
-        var password: String?
+        var password = password
         var rememberPassword: Bool?
         while true {
             do {
@@ -377,7 +377,7 @@ class MenuBarAgent: NSObject, ObservableObject {
                 guard let entry = promptForPassword(
                     message: kvmError.passwordPromptMessage(for: device, prefilled: savedPassword != nil),
                     prefill: savedPassword,
-                    rememberByDefault: kvmDeviceManager.hasSavedPassword(for: device)
+                    rememberByDefault: rememberPassword ?? kvmDeviceManager.hasSavedPassword(for: device)
                 ) else { return }
                 password = entry.password
                 rememberPassword = entry.remember
@@ -481,17 +481,7 @@ class MenuBarAgent: NSObject, ObservableObject {
         let password = passwordField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
         Task {
-            if password.isEmpty {
-                await connectSession(to: device)
-            } else {
-                showMainWindow()
-                do {
-                    let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
-                    await finishSessionConnect(connected)
-                } catch {
-                    showError(title: "Failed to connect", message: String(describing: error))
-                }
-            }
+            await connectSession(to: device, password: password.isEmpty ? nil : password)
         }
     }
     

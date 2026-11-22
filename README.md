@@ -139,7 +139,7 @@ The password prompt has a **Remember password in Keychain** option, off by defau
 succeeds, the password is saved for that device (service `<bundle ID>.password`, same protection as the token).
 Overlook never signs in with a saved password on its own: the next time the device asks for a login, the prompt
 opens prefilled and names the address it will be sent to, and the password is only sent when you click
-**Connect**. If the device rejects it, the prompt opens again empty. Turning the option off on a successful login
+**Connect**. If the device rejects it, the saved password is removed and the prompt opens again empty. Turning the option off on a successful login
 removes the saved password. To remove it at any time, select the device in **Connections** and click
 **Forget Password**, or use **Devices → Forget Saved Password** in the menu bar. Forgetting a device removes its
 token and password.

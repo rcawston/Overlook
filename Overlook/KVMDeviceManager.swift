@@ -709,6 +709,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 do {
                     token = try await client.authLogin(user: user, password: password)
                 } catch GLKVMClient.ClientError.httpError(let statusCode, _) where statusCode < 500 {
+                    await forgetSavedPassword(ifEqualTo: password, for: finalDevice)
                     throw KVMError.passwordRejected
                 }
                 client.authToken = token
@@ -732,6 +733,12 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         connectedDevice = persisted
         glkvmClient = client
         return persisted
+    }
+
+    /// A saved password the device rejected is known to be wrong; remove it so it is not offered again.
+    private func forgetSavedPassword(ifEqualTo password: String, for device: KVMDevice) async {
+        guard let saved = await savedPassword(for: device), saved == password else { return }
+        forgetSavedPassword(for: device)
     }
 
     private func updateSavedPassword(_ password: String, remember: Bool, for device: KVMDevice) async {
