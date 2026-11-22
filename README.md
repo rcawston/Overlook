@@ -125,6 +125,18 @@ On connect, Overlook will:
 
 If authentication fails, you’ll be prompted for a password and Overlook will attempt a login.
 
+#### Where the session token is stored
+
+Overlook keeps each saved device’s session token in the macOS Keychain, not in its preferences. Passwords are
+not stored. Keychain items use the service `<bundle ID>.auth-token` and the account `host:port`. They use the
+“after first unlock, this device only” protection class, are not synchronizable and never sync through iCloud
+Keychain. Forgetting a device deletes its token. Overlook never logs tokens.
+
+Tokens saved in plain text by earlier versions are moved into the Keychain on first launch and then removed from
+the preferences (a token whose Keychain write fails stays until the next launch retries it). The saved device list
+keeps its format, so older versions can still read it, but they will ask for the password once because they
+cannot read the Keychain.
+
 ### 3) Control the remote machine
 
 Once connected:
@@ -333,7 +345,7 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
 ### Security notes
 
 - The app currently allows insecure TLS for device connections (useful for devices with self-signed certs).
-- Treat your `auth_token` like a password.
+- Treat your `auth_token` like a password. Overlook stores it only in the macOS Keychain.
 
 ---
 
