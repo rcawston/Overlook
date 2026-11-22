@@ -42,6 +42,9 @@ struct ManualConnectSheet: View {
 struct PasswordPromptSheet: View {
     @Binding var isPresented: Bool
     @Binding var password: String
+    @Binding var rememberPassword: Bool
+
+    let message: String
 
     let onCancel: () -> Void
     let onConnect: () -> Void
@@ -51,8 +54,14 @@ struct PasswordPromptSheet: View {
             Text("Password Required")
                 .font(.headline)
 
+            Text(message)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             SecureField("Password", text: $password)
                 .textFieldStyle(.roundedBorder)
+
+            Toggle("Remember password in Keychain", isOn: $rememberPassword)
 
             HStack {
                 Spacer()
