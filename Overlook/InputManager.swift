@@ -417,9 +417,10 @@ class InputManager: ObservableObject {
             }
 
             if isKeyDown, !event.isARepeat,
-               let action = remoteKeyboardShortcuts.action(forKeyCode: keyCode, modifiers: modifiers) {
+               let action = remoteKeyboardShortcuts.action(forKeyCode: keyCode, modifiers: modifiers),
+               isRemoteKeyboardActionAvailable(action) {
                 suppressedKeyUps.insert(keyCode)
-                performRemoteKeyboardAction(action, modifiers: modifiers)
+                performRemoteKeyboardAction(action)
                 return
             }
 
@@ -538,32 +539,28 @@ class InputManager: ObservableObject {
         return nil
     }
 
-    private func performRemoteKeyboardAction(_ action: RemoteKeyboardAction, modifiers: NSEvent.ModifierFlags) {
-        // The shortcut's modifiers may already be held on the remote. Release them first so
-        // that it only receives the action itself.
-        var modifierReleases: [String] = []
-        if commandKeySentToRemote, let code = activeCommandKeyCode, let metaKey = glkvmKeyForMacKeyCode(code) {
-            modifierReleases.append(metaKey)
+    /// Key actions are sent over the GLKVM HID WebSocket only; with the WebRTC transport their
+    /// shortcuts are not matched and the keys are forwarded as usual. Paste works with both.
+    func isRemoteKeyboardActionAvailable(_ action: RemoteKeyboardAction) -> Bool {
+        action.remoteKeys.isEmpty || transportMode == .glkvmWebSocket
+    }
+
+    private static let shiftControlOptionKeyCodes: Set<UInt16> = [56, 60, 59, 62, 58, 61]
+
+    private func performRemoteKeyboardAction(_ action: RemoteKeyboardAction) {
+        // The shortcut's modifiers may already be held on the remote. Release them through the
+        // tracked path first, so that the remote only receives the action itself and their
+        // later local release is not sent again.
+        prepareForLocalCommandShortcut()
+        let heldModifiers = heldKeyCodes.filter { Self.shiftControlOptionKeyCodes.contains($0) }
+        let timestamp = CACurrentMediaTime()
+        for keyCode in heldModifiers.reversed() {
+            sendKeyEvent(KeyEvent(keyCode: keyCode, isKeyDown: false, modifiers: [], timestamp: timestamp))
         }
-        if modifiers.contains(.shift) {
-            modifierReleases += ["ShiftLeft", "ShiftRight"]
-        }
-        if modifiers.contains(.control) {
-            modifierReleases += ["ControlLeft", "ControlRight"]
-        }
-        if modifiers.contains(.option) {
-            modifierReleases += ["AltLeft", "AltRight"]
-        }
-        pendingCommandKeyCode = activeCommandKeyCode ?? pendingCommandKeyCode
-        activeCommandKeyCode = nil
-        commandKeySentToRemote = false
 
         let actionKeys = action.remoteKeys
-        if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
+        if !actionKeys.isEmpty, transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
             Task {
-                for key in modifierReleases {
-                    try? await ws.sendHidKey(key: key, state: false)
-                }
                 // Press the keys as one combination and always release all of them, even if
                 // a press could not be sent.
                 for key in actionKeys {

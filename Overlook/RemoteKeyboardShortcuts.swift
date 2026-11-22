@@ -18,13 +18,12 @@ enum RemoteKeyboardAction: String, CaseIterable, Identifiable {
         }
     }
 
-    var defaultShortcut: RemoteKeyboardShortcut {
+    /// Only paste is enabled by default. Insert and Ctrl+Alt+Delete have no default, so no
+    /// combination that already reaches the remote (such as ⌘= for zoom) is taken away.
+    var defaultShortcut: RemoteKeyboardShortcut? {
         switch self {
-        case .insert:
-            // The key directly left of Backspace: `=` on US, `´` on German keyboards.
-            return RemoteKeyboardShortcut(keyCode: UInt16(kVK_ANSI_Equal), modifiers: [.command])
-        case .ctrlAltDelete:
-            return RemoteKeyboardShortcut(keyCode: UInt16(kVK_Delete), modifiers: [.command, .option])
+        case .insert, .ctrlAltDelete:
+            return nil
         case .paste:
             return RemoteKeyboardShortcut(keyCode: UInt16(kVK_ANSI_V), modifiers: [.command])
         }

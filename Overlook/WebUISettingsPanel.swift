@@ -612,7 +612,7 @@ struct WebUISettingsPanel: View {
                                 RemoteKeyboardShortcutRow(action: action, isActive: isPresented)
                             }
 
-                            Text("Applies to all devices while keyboard capture is active. Click a shortcut to record a new one; Escape cancels.")
+                            Text("Applies to all devices while keyboard capture is active. Click a shortcut to record a new one; Escape cancels. Insert and Ctrl+Alt+Delete are disabled until you record a shortcut.")
                                 .foregroundColor(.secondary)
                                 .font(.caption)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1328,6 +1328,10 @@ private struct RemoteKeyboardShortcutRow: View {
         inputManager.remoteKeyboardShortcuts[action]
     }
 
+    private var isAvailable: Bool {
+        inputManager.isRemoteKeyboardActionAvailable(action)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -1356,23 +1360,35 @@ private struct RemoteKeyboardShortcutRow: View {
                 .help("Disable")
                 .accessibilityLabel("Disable \(action.title) shortcut")
 
-                Button(action: {
-                    stopRecording()
-                    message = inputManager.setRemoteKeyboardShortcut(action.defaultShortcut, for: action)
-                }) {
-                    Image(systemName: "arrow.counterclockwise")
+                if let defaultShortcut = action.defaultShortcut {
+                    Button(action: {
+                        stopRecording()
+                        message = inputManager.setRemoteKeyboardShortcut(defaultShortcut, for: action)
+                    }) {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(shortcut == defaultShortcut)
+                    .help("Reset to \(defaultShortcut.displayString)")
+                    .accessibilityLabel("Reset \(action.title) shortcut to default")
                 }
-                .buttonStyle(.borderless)
-                .disabled(shortcut == action.defaultShortcut)
-                .help("Reset to \(action.defaultShortcut.displayString)")
-                .accessibilityLabel("Reset \(action.title) shortcut to default")
             }
+            .disabled(!isAvailable)
 
-            if let message {
+            if !isAvailable {
+                Text("Not available with the WebRTC input transport.")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            } else if let message {
                 Text(message)
                     .foregroundColor(.red)
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: isAvailable) { _, available in
+            if !available {
+                stopRecording()
             }
         }
         .onChange(of: isActive) { _, active in

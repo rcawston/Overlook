@@ -215,8 +215,7 @@ Overlook includes a few “quality of life” shortcuts.
 
 - `⌘C`: toggles OCR selection mode (so you can “copy” from the remote screen).
 - `⌘V`: pastes macOS clipboard to the remote (configurable, see below).
-- `⌘` + the key left of Backspace (`=` on US, `´` on German keyboards): sends **Insert** (configurable).
-- `⌘⌥⌫`: sends **Ctrl+Alt+Delete** (configurable).
+- **Insert** and **Ctrl+Alt+Delete**: no shortcut by default; record one in Settings (see below).
 
 ### Remote keyboard actions
 
@@ -224,11 +223,11 @@ Some keys cannot be typed on a Mac keyboard, or macOS intercepts them. Overlook 
 
 | Action | Default | Sends |
 | --- | --- | --- |
-| Insert | `⌘` + key left of Backspace | `Insert` |
-| Ctrl+Alt+Delete | `⌘⌥⌫` | `Ctrl+Alt+Delete` as one combination |
+| Insert | Disabled | `Insert` |
+| Ctrl+Alt+Delete | Disabled | `Ctrl+Alt+Delete` as one combination |
 | Paste clipboard as text | `⌘V` | The clipboard, typed via the device’s HID text API |
 
-Configure them in **Settings → Remote keyboard actions**. They apply to all devices. Click a shortcut and press a new combination with `⌘`, `⌃` or `⌥` (`Escape` cancels). Each action can be disabled or reset to its default. Shortcuts are matched by physical key, so the defaults work on any keyboard layout. Combinations used by another action, `⌘C` (OCR), app shortcuts (`⌘Q`, `⌘W`, `⌘,`, `⌘H`, `⌘M`) and the menu bar’s global shortcuts are rejected. Changes are saved and apply immediately.
+Configure them in **Settings → Remote keyboard actions**. They apply to all devices. Click a shortcut and press a new combination with `⌘`, `⌃` or `⌥` (`Escape` cancels). Each action can be disabled, and paste can be reset to `⌘V`. Insert and Ctrl+Alt+Delete are disabled by default so that no combination that already reaches the remote (such as `⌘=`) is taken away; pick one the remote does not need, for example `⌘` + the key left of Backspace (`=` on US, `´` on German keyboards) for Insert. Shortcuts are matched by physical key, so they work on any keyboard layout. Insert and Ctrl+Alt+Delete need the GLKVM HID WebSocket transport (the default). Combinations used by another action, `⌘C` (OCR), app shortcuts (`⌘Q`, `⌘W`, `⌘,`, `⌘H`, `⌘M`) and the menu bar’s global shortcuts are rejected. Changes are saved and apply immediately.
 
 The actions only apply while keyboard capture is active for the video. A matched shortcut is handled locally and its keys are not forwarded; the remote first receives a release for the shortcut’s modifiers, then the action’s keys are pressed and always released. All other keys are forwarded as before.
 
