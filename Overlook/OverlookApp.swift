@@ -20,6 +20,9 @@ struct OverlookApp: App {
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.automatic)
+        .commands {
+            WindowSizeCommands()
+        }
     }
 }
 

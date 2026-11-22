@@ -41,6 +41,8 @@ struct ContentView: View {
     @State private var showFullscreenControls: Bool = false
     @State private var fullscreenHoverTask: Task<Void, Never>?
 
+    @StateObject private var windowSizeController = WindowSizeController()
+
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
 
     private var preferredColorScheme: ColorScheme? {
@@ -314,6 +316,11 @@ struct ContentView: View {
         }
         .onReceive(kvmDeviceManager.$glkvmClient) { client in
             inputManager.setGLKVMClient(client)
+        }
+        .background(WindowSizeControllerAttacher(controller: windowSizeController))
+        .focusedSceneObject(windowSizeController)
+        .onChange(of: webRTCManager.videoSize, initial: true) { _, size in
+            windowSizeController.setVideoSize(size)
         }
         .onReceive(kvmDeviceManager.$connectedDevice) { device in
             Task { @MainActor in

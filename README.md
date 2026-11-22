@@ -136,6 +136,23 @@ Once connected:
 
 ---
 
+## Window size
+
+**Window → Window Size** resizes the window relative to the current video resolution: **0.25×**, **0.5×**, **0.75×**, **1× (1:1 pixels)**, **1.5×** or **2×**.
+
+- **1× (1:1 pixels)** maps one video pixel to one pixel of the display the window is on. On a Retina display, a 1920 × 1080 video then takes 960 × 540 points. The other sizes scale from there.
+- Each item shows the resulting video size in display pixels, for example `1× (1:1 pixels) — 1920 × 1080`.
+- The sizes apply to the video area; the title bar and toolbar come on top.
+- The size that matches the current window is checked.
+- Sizes that would not fit the screen (excluding menu bar and Dock), or that are smaller than the window allows, are disabled instead of being silently shrunk. The choices update when the window moves to another display or the video resolution changes.
+- The window keeps its top-left corner. It only moves if the new size would otherwise extend past the edge of the screen.
+- The menu is unavailable while there is no video and in full screen.
+- The toolbar’s **Fit window to guest** button is unchanged.
+
+These controls only change the local window size. They never change the remote computer’s resolution.
+
+---
+
 ## OCR Copy Mode (Remote → Local)
 
 ### Enable OCR mode
