@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Combine
 import CryptoKit
+import Security
 
 @MainActor
 final class KVMDeviceManager: NSObject, ObservableObject {
@@ -51,7 +52,9 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         let port: Int
         let name: String
         let type: KVMDeviceType
-        let authToken: String
+        // Tokens are kept in the Keychain and written here as "". The field remains so older
+        // builds can still read the list; it holds a token only until its Keychain write succeeds.
+        var authToken: String
         let capabilities: Set<KVMCapability>
         // Optional so records saved before this setting existed still decode (as Automatic).
         let pasteKeymap: String?
@@ -61,6 +64,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         super.init()
         setupNetworkMonitoring()
         loadPersistedDevices()
+        migratePlaintextTokens()
     }
     
     private func setupNetworkMonitoring() {
@@ -622,6 +626,11 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         current.removeAll { $0.host == host && $0.port == port }
         writePersistedDevices(current)
 
+        let key = credentialKey(host: host, port: port)
+        Task.detached {
+            DeviceTokenStore.delete(account: key)
+        }
+
         availableDevices.removeAll { $0.host == host && $0.port == port }
         if connectedDevice?.host == host, connectedDevice?.port == port {
             connectedDevice = nil
@@ -651,6 +660,12 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             finalDevice = updatedDevice
         } else {
             finalDevice = device
+            if finalDevice.authToken.isEmpty {
+                let key = credentialKey(host: device.host, port: device.port)
+                if let storedToken = await Task.detached(operation: { DeviceTokenStore.read(account: key) }).value {
+                    finalDevice.authToken = storedToken
+                }
+            }
         }
 
         guard let client = try? GLKVMClient(device: finalDevice, allowInsecureTLS: true) else {
@@ -675,13 +690,23 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             }
         }
 
-        let persisted = persistDevice(finalDevice)
+        let tokenInKeychain = await storeToken(of: finalDevice)
+        let persisted = persistDevice(finalDevice, tokenInKeychain: tokenInKeychain)
         connectedDevice = persisted
         glkvmClient = client
         return persisted
     }
 
-    private func persistDevice(_ device: KVMDevice) -> KVMDevice {
+    /// Saves the device's token in the Keychain off the main thread, so a Keychain
+    /// permission prompt never blocks the UI. Returns false if the write failed.
+    private func storeToken(of device: KVMDevice) async -> Bool {
+        let token = device.authToken
+        guard !token.isEmpty else { return true }
+        let key = credentialKey(host: device.host, port: device.port)
+        return await Task.detached(operation: { DeviceTokenStore.save(token, account: key) }).value
+    }
+
+    private func persistDevice(_ device: KVMDevice, tokenInKeychain: Bool) -> KVMDevice {
         var current = readPersistedDevices()
         // A freshly discovered entry for a saved host has no paste layout yet; keep the saved one.
         let existingRecord = current.first(where: { $0.host == device.host && $0.port == device.port })
@@ -690,7 +715,9 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             port: device.port,
             name: device.name,
             type: device.type,
-            authToken: device.authToken,
+            // If the Keychain write failed, keep the token here so it is not lost;
+            // the migration at the next launch moves it.
+            authToken: tokenInKeychain ? "" : device.authToken,
             capabilities: device.capabilities,
             pasteKeymap: device.pasteKeymap ?? existingRecord?.pasteKeymap
         )
@@ -731,6 +758,36 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         availableDevices = removeDuplicates(from: devices).sorted { $0.name < $1.name }
     }
 
+    /// Earlier versions stored tokens in plain text in UserDefaults. Moves them to the Keychain
+    /// off the main thread, then blanks each one whose Keychain write succeeded. A failed write
+    /// leaves the token in place (and in memory) to be retried at the next launch.
+    private func migratePlaintextTokens() {
+        let pending = readPersistedDevices()
+            .filter { !$0.authToken.isEmpty }
+            .map { (key: credentialKey(host: $0.host, port: $0.port), token: $0.authToken) }
+        guard !pending.isEmpty else { return }
+
+        Task {
+            let migrated = await Task.detached(operation: {
+                pending.filter { DeviceTokenStore.save($0.token, account: $0.key) }
+            }).value
+            guard !migrated.isEmpty else { return }
+
+            var current = readPersistedDevices()
+            var changed = false
+            for index in current.indices {
+                let key = credentialKey(host: current[index].host, port: current[index].port)
+                // Skip records whose token changed since the migration started.
+                guard migrated.contains(where: { $0.key == key && $0.token == current[index].authToken }) else { continue }
+                current[index].authToken = ""
+                changed = true
+            }
+            if changed {
+                writePersistedDevices(current)
+            }
+        }
+    }
+
     /// Sets the keyboard layout used to type pasted text on the remote computer.
     /// `nil` means Automatic: the keymap configured on the device itself.
     func setPasteKeymap(_ keymap: String?, for device: KVMDevice) {
@@ -758,6 +815,10 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         if connectedDevice?.host == host, connectedDevice?.port == port {
             connectedDevice?.pasteKeymap = keymap
         }
+    }
+
+    private func credentialKey(host: String, port: Int) -> String {
+        "\(host):\(port)"
     }
 
     private func savedDeviceId(host: String, port: Int) -> String {
@@ -946,5 +1007,98 @@ enum KVMError: Error, LocalizedError {
         case .networkUnavailable:
             return "Network is not available"
         }
+    }
+}
+
+// MARK: - Keychain
+
+/// Stores device session tokens as generic-password items in the macOS Keychain:
+/// service `<bundle ID>.auth-token`, account `host:port`. Items are never synchronized
+/// through iCloud and are only readable after the first unlock on this Mac. Tokens are
+/// never logged. The functions are synchronous; call them off the main thread.
+enum DeviceTokenStore {
+    private static var service: String {
+        "\(Bundle.main.bundleIdentifier ?? "com.rcawston.Overlook").auth-token"
+    }
+
+    /// The data protection keychain needs a keychain access group (provisioning profile).
+    /// Builds without one get errSecMissingEntitlement and use the login keychain instead.
+    private static let keychains = [true, false]
+
+    private static func baseQuery(account: String, dataProtection: Bool) -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
+        ]
+        if dataProtection {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
+    }
+
+    static func read(account: String) -> String? {
+        for dataProtection in keychains {
+            var query = baseQuery(account: account, dataProtection: dataProtection)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) {
+                return value
+            }
+            if status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("read", status)
+            }
+        }
+        return nil
+    }
+
+    static func save(_ token: String, account: String) -> Bool {
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+
+        for dataProtection in keychains {
+            let status = SecItemUpdate(baseQuery(account: account, dataProtection: dataProtection) as CFDictionary, attributes as CFDictionary)
+            if status == errSecSuccess {
+                return true
+            }
+            if status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("update", status)
+            }
+        }
+
+        for dataProtection in keychains {
+            var item = baseQuery(account: account, dataProtection: dataProtection)
+            item.merge(attributes) { _, new in new }
+            item[kSecAttrLabel as String] = "Overlook session for \(account)"
+
+            let status = SecItemAdd(item as CFDictionary, nil)
+            if status == errSecSuccess {
+                return true
+            }
+            if status != errSecMissingEntitlement {
+                log("add", status)
+                return false
+            }
+        }
+        return false
+    }
+
+    static func delete(account: String) {
+        for dataProtection in keychains {
+            let status = SecItemDelete(baseQuery(account: account, dataProtection: dataProtection) as CFDictionary)
+            if status != errSecSuccess, status != errSecItemNotFound, status != errSecMissingEntitlement {
+                log("delete", status)
+            }
+        }
+    }
+
+    private static func log(_ operation: String, _ status: OSStatus) {
+        NSLog("[Overlook keychain] token %@ failed: %@", operation, "\(status)")
     }
 }
