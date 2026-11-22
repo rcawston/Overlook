@@ -151,7 +151,7 @@ Once connected:
 Press `⌃⌘C`, choose **View → Clean View**, or use the toolbar button (filled rectangle icon) to switch the focused window to clean view. The window then shows only the remote screen, edge to edge: no title bar (with its live stats), window buttons, toolbar or shadow. In a video meeting (Teams, Zoom, Meet, …), share the Overlook window and the other participants see only the remote desktop.
 
 - The video stays where it is on screen; only the window chrome is removed.
-- Press `⌃⌘C` again or choose **View → Clean View** to bring the chrome back. The window returns to its exact previous size and position.
+- There is no on-screen control to leave clean view, so nothing extra appears in the shared picture. Press `⌃⌘C` again or choose **View → Clean View** to bring the chrome back. The video stays where it is and the window chrome is added around it, so moves and resizes made in clean view are kept.
 - The stream and session keep running; nothing reconnects.
 - Resize the window by its edges as usual; the video aspect ratio is kept.
 - The window keeps a stable, descriptive title (`Overlook – <device name>`) so you can pick it in a meeting app’s window list. The live stats return to the title when you leave clean view.

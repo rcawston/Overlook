@@ -467,7 +467,7 @@ struct ContentView: View {
         Button(action: { isCleanView = true }) {
             Image(systemName: "rectangle.inset.filled")
         }
-        .help("Clean View (⌃⌘C)")
+        .help("Clean View: show only the remote screen. Press ⌃⌘C or choose View → Clean View to leave it.")
     }
 
     /// Handles ⌃⌘C intercepted during keyboard capture for this window.
@@ -719,7 +719,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
                 if requested {
                     coordinator.enterCleanView(window: window, frameBeforeChange: frame)
                 } else {
-                    coordinator.exitCleanView(window: window, restoreFrame: true)
+                    coordinator.exitCleanView(window: window, videoFrame: frame)
                 }
                 // Clean view is refused in full screen; keep the toggle in sync with the window.
                 if coordinator.isCleanViewApplied != requested {
@@ -783,15 +783,17 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
         private var storedWindowedTitleVisibility: NSWindow.TitleVisibility?
         private var storedWindowedToolbarIsVisible: Bool?
 
-        /// Window state saved when entering clean view, restored exactly when leaving it.
+        /// Window state saved when entering clean view and restored when leaving it.
         private struct CleanViewRestoreState {
-            let frame: NSRect
+            /// Where the video sat inside the window frame with chrome, in window coordinates,
+            /// and how much larger the frame was than the video area.
+            let videoOrigin: NSPoint
+            let chromeSize: NSSize
             let styleMaskHadFullSizeContentView: Bool
             let titlebarAppearsTransparent: Bool
             let titleVisibility: NSWindow.TitleVisibility
             let toolbarIsVisible: Bool?
             let hasShadow: Bool
-            let videoAspect: Double?
         }
 
         private var cleanViewRestoreState: CleanViewRestoreState?
@@ -859,27 +861,32 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
         /// traffic lights, toolbar and shadow. The window keeps its title bar style bit so it
         /// can still become key, stays resizable by its edges, and keeps the video at the same
         /// place on screen. Only window properties change, so the stream and session are
-        /// untouched. Leaving clean view restores the saved chrome and frame.
+        /// untouched. Leaving clean view restores the saved chrome around the video's current
+        /// position and size.
         func enterCleanView(window: NSWindow, frameBeforeChange: NSRect) {
             guard cleanViewRestoreState == nil,
                   window.styleMask.contains(.fullScreen) == false else { return }
 
             let layout = window.contentLayoutRect
+            let chromeSize = NSSize(
+                width: window.frame.width - layout.width,
+                height: window.frame.height - layout.height
+            )
             let videoFrame = NSRect(
                 x: frameBeforeChange.minX + layout.minX,
                 y: frameBeforeChange.minY + layout.minY,
-                width: frameBeforeChange.width - (window.frame.width - layout.width),
-                height: frameBeforeChange.height - (window.frame.height - layout.height)
+                width: frameBeforeChange.width - chromeSize.width,
+                height: frameBeforeChange.height - chromeSize.height
             )
 
             cleanViewRestoreState = CleanViewRestoreState(
-                frame: frameBeforeChange,
+                videoOrigin: layout.origin,
+                chromeSize: chromeSize,
                 styleMaskHadFullSizeContentView: window.styleMask.contains(.fullSizeContentView),
                 titlebarAppearsTransparent: window.titlebarAppearsTransparent,
                 titleVisibility: window.titleVisibility,
                 toolbarIsVisible: window.toolbar?.isVisible,
-                hasShadow: window.hasShadow,
-                videoAspect: videoAspect
+                hasShadow: window.hasShadow
             )
 
             window.toolbar?.isVisible = false
@@ -894,7 +901,9 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             window.setFrame(videoFrame, display: true)
         }
 
-        func exitCleanView(window: NSWindow, restoreFrame: Bool) {
+        /// Restores the chrome. With a `videoFrame` (the clean window's frame), the chrome is
+        /// added around it so the video keeps its place and size, mirroring how entering works.
+        func exitCleanView(window: NSWindow, videoFrame: NSRect?) {
             guard let state = cleanViewRestoreState else { return }
             cleanViewRestoreState = nil
 
@@ -911,12 +920,19 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             if let visible = state.toolbarIsVisible {
                 window.toolbar?.isVisible = visible
             }
-            guard restoreFrame else { return }
-            window.setFrame(state.frame, display: true)
+            guard let videoFrame else { return }
 
-            if videoAspect != state.videoAspect {
-                adjustFrameToVideoAspect(window: window)
+            var frame = NSRect(
+                x: videoFrame.minX - state.videoOrigin.x,
+                y: videoFrame.minY - state.videoOrigin.y,
+                width: videoFrame.width + state.chromeSize.width,
+                height: videoFrame.height + state.chromeSize.height
+            )
+            // Keep the returning title bar below the menu bar when the video touches the top.
+            if let visible = window.screen?.visibleFrame, frame.maxY > visible.maxY {
+                frame.origin.y = max(visible.maxY - frame.height, visible.minY)
             }
+            window.setFrame(frame, display: true)
         }
 
         private func setStandardWindowButtonsHidden(_ hidden: Bool, window: NSWindow) {
@@ -996,7 +1012,7 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
         // Full screen can still be requested from the View menu while in clean view. Bring the
         // chrome back first; macOS restores the window frame when full screen ends.
         if let window = notification.object as? NSWindow, isCleanViewApplied {
-            exitCleanView(window: window, restoreFrame: false)
+            exitCleanView(window: window, videoFrame: nil)
             cleanViewBinding?.wrappedValue = false
         }
         forwardedDelegate?.windowWillEnterFullScreen?(notification)
