@@ -202,7 +202,7 @@ The choice is saved with the device.
 
 ### Tips
 
-- If you paste a very large block of text, the remote side may take time to process.
+- If you paste a very large block of text, the remote side may take time to process. The device types roughly 80 characters per second; Overlook sends long text in consecutive chunks of up to 500 characters and stops at the first chunk that fails.
 - For best reliability, paste smaller chunks when interacting with BIOS/UEFI or slow boot environments.
 
 ---

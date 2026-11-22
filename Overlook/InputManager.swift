@@ -49,6 +49,9 @@ class InputManager: ObservableObject {
     /// Keyboard layout for typing pasted text on the remote; `nil` uses the device's keymap.
     private var pasteKeymap: String?
     private var isPasteInProgress = false
+    /// The device answers a print request only after typing it (about 80 characters per second)
+    /// and cancels typing if the request times out, so long pastes are sent in chunks.
+    private static let pasteChunkLength = 500
     
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
@@ -550,15 +553,46 @@ class InputManager: ObservableObject {
                 } else {
                     keymap = try? await client.getSystemConfig().keymap
                 }
+                // Sequential, one request per chunk; the first failure stops the paste.
                 // limit 0 disables kvmd's default 1024 character cut-off.
-                try await client.hidPrint(text: trimmed, keymap: keymap, limit: 0)
+                for chunk in Self.chunksForRemotePaste(trimmed, maxLength: Self.pasteChunkLength) {
+                    try await client.hidPrint(text: chunk, keymap: keymap, limit: 0)
+                }
             } catch {
-                // Deliberately not retried: part of the text may already have been typed remotely.
+                // Deliberately not retried, and no later chunk is sent:
+                // part of the text may already have been typed remotely.
                 print("Paste to remote failed: \(error)")
                 self?.pasteErrorMessage = "The clipboard text could not be sent to the remote computer. Some of it may already have been typed, so it was not retried. Check the connection and the remote keyboard layout in Settings."
             }
             self?.isPasteInProgress = false
         }
+    }
+
+    /// Splits text into consecutive chunks of at most `maxLength` characters (grapheme clusters,
+    /// so a cluster is never split). Where possible a boundary falls between two non-whitespace
+    /// characters, so no chunk starts or ends with a line break or space that could be trimmed.
+    private static func chunksForRemotePaste(_ text: String, maxLength: Int) -> [String] {
+        var chunks: [String] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            var end = text.index(start, offsetBy: maxLength, limitedBy: text.endIndex) ?? text.endIndex
+            if end < text.endIndex {
+                var candidate = end
+                while candidate > text.index(after: start) {
+                    let before = text[text.index(before: candidate)]
+                    if !before.isWhitespace, !text[candidate].isWhitespace {
+                        break
+                    }
+                    candidate = text.index(before: candidate)
+                }
+                if candidate > text.index(after: start) {
+                    end = candidate
+                }
+            }
+            chunks.append(String(text[start..<end]))
+            start = end
+        }
+        return chunks
     }
 
     /// Plain text with `\n` line breaks and no control characters other than newline and tab.
