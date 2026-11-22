@@ -53,6 +53,8 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         let type: KVMDeviceType
         let authToken: String
         let capabilities: Set<KVMCapability>
+        // Optional so records saved before this setting existed still decode (as Automatic).
+        let pasteKeymap: String?
     }
     
     override init() {
@@ -680,16 +682,19 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     }
 
     private func persistDevice(_ device: KVMDevice) -> KVMDevice {
+        var current = readPersistedDevices()
+        // A freshly discovered entry for a saved host has no paste layout yet; keep the saved one.
+        let existingRecord = current.first(where: { $0.host == device.host && $0.port == device.port })
         let record = PersistedDevice(
             host: device.host,
             port: device.port,
             name: device.name,
             type: device.type,
             authToken: device.authToken,
-            capabilities: device.capabilities
+            capabilities: device.capabilities,
+            pasteKeymap: device.pasteKeymap ?? existingRecord?.pasteKeymap
         )
 
-        var current = readPersistedDevices()
         if let index = current.firstIndex(where: { $0.host == device.host && $0.port == device.port }) {
             current[index] = record
         } else {
@@ -699,6 +704,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
 
         var saved = device
         saved.id = savedDeviceId(host: device.host, port: device.port)
+        saved.pasteKeymap = record.pasteKeymap
 
         availableDevices.removeAll { $0.host == device.host && $0.port == device.port }
         availableDevices.append(saved)
@@ -718,10 +724,40 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 port: record.port,
                 type: record.type,
                 authToken: record.authToken,
-                capabilities: record.capabilities
+                capabilities: record.capabilities,
+                pasteKeymap: record.pasteKeymap
             )
         }
         availableDevices = removeDuplicates(from: devices).sorted { $0.name < $1.name }
+    }
+
+    /// Sets the keyboard layout used to type pasted text on the remote computer.
+    /// `nil` means Automatic: the keymap configured on the device itself.
+    func setPasteKeymap(_ keymap: String?, for device: KVMDevice) {
+        let host = device.host
+        let port = device.port
+
+        var current = readPersistedDevices()
+        if let index = current.firstIndex(where: { $0.host == host && $0.port == port }) {
+            let record = current[index]
+            current[index] = PersistedDevice(
+                host: record.host,
+                port: record.port,
+                name: record.name,
+                type: record.type,
+                authToken: record.authToken,
+                capabilities: record.capabilities,
+                pasteKeymap: keymap
+            )
+            writePersistedDevices(current)
+        }
+
+        for index in availableDevices.indices where availableDevices[index].host == host && availableDevices[index].port == port {
+            availableDevices[index].pasteKeymap = keymap
+        }
+        if connectedDevice?.host == host, connectedDevice?.port == port {
+            connectedDevice?.pasteKeymap = keymap
+        }
     }
 
     private func savedDeviceId(host: String, port: Int) -> String {
@@ -810,6 +846,8 @@ struct KVMDevice: Identifiable, Codable {
     var type: KVMDeviceType
     var authToken: String
     let capabilities: Set<KVMCapability>
+    /// Keyboard layout (kvmd keymap name) used to type pasted text; `nil` uses the device's keymap.
+    var pasteKeymap: String? = nil
     
     var connectionString: String {
         return "\(host):\(port)"
