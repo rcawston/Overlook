@@ -350,11 +350,6 @@ struct ContentView: View {
                 isOCRModeEnabled.toggle()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .overlookToggleViewOnly)) { note in
-            if let window = note.object as? NSWindow, windowRef !== window { return }
-            guard isConnected else { return }
-            setViewOnly(!isViewOnly)
-        }
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
