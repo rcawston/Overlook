@@ -156,7 +156,7 @@ Press `⌃⌘C`, choose **View → Clean View**, or use the toolbar button (fill
 - Resize the window by its edges as usual; the video aspect ratio is kept.
 - The window keeps a stable, descriptive title (`Overlook – <device name>`) so you can pick it in a meeting app’s window list. The live stats return to the title when you leave clean view.
 - The corners stay rounded: macOS draws them for every window that can take keyboard input.
-- There is no title bar to drag, and clicks on the video always go to the remote. To move the window, use **Window → Center** or **Window → Move & Resize**, or leave clean view, move the window, and switch back.
+- The window cannot be moved in clean view, so clicks and drags anywhere on the video, including the top edge, always go to the remote. To move the window, leave clean view, move it, and switch back; the video keeps its place both ways.
 - Clean view and full screen do not mix: the toggle is unavailable in full screen, and entering full screen from clean view brings the chrome back first.
 
 ---

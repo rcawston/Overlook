@@ -670,15 +670,32 @@ private struct WindowReferenceSetter: NSViewRepresentable {
     @Binding var window: NSWindow?
 
     func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
+        let view = WindowChangeObservingView(frame: .zero)
+        view.onWindowChange = { [binding = $window] w in
+            report(w, to: binding)
+        }
+        return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        guard let w = nsView.window else { return }
-        if window !== w {
-            DispatchQueue.main.async {
-                window = w
-            }
+        report(nsView.window, to: $window)
+    }
+
+    /// The first update runs before the view is in a window, and later updates are not
+    /// guaranteed, so the window is also reported when the view moves into one.
+    private func report(_ w: NSWindow?, to binding: Binding<NSWindow?>) {
+        guard let w, binding.wrappedValue !== w else { return }
+        DispatchQueue.main.async {
+            binding.wrappedValue = w
+        }
+    }
+
+    private final class WindowChangeObservingView: NSView {
+        var onWindowChange: ((NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onWindowChange?(window)
         }
     }
 }
@@ -794,6 +811,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             let titleVisibility: NSWindow.TitleVisibility
             let toolbarIsVisible: Bool?
             let hasShadow: Bool
+            let isMovable: Bool
         }
 
         private var cleanViewRestoreState: CleanViewRestoreState?
@@ -886,7 +904,8 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
                 titlebarAppearsTransparent: window.titlebarAppearsTransparent,
                 titleVisibility: window.titleVisibility,
                 toolbarIsVisible: window.toolbar?.isVisible,
-                hasShadow: window.hasShadow
+                hasShadow: window.hasShadow,
+                isMovable: window.isMovable
             )
 
             window.toolbar?.isVisible = false
@@ -898,6 +917,9 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             }
             setStandardWindowButtonsHidden(true, window: window)
             window.hasShadow = false
+            // The hidden title bar still moves the window when dragged, even where the video
+            // view lies on top of it. Drags there must go to the remote instead.
+            window.isMovable = false
             window.setFrame(videoFrame, display: true)
         }
 
@@ -908,6 +930,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             cleanViewRestoreState = nil
 
             window.hasShadow = state.hasShadow
+            window.isMovable = state.isMovable
             setStandardWindowButtonsHidden(false, window: window)
             if state.styleMaskHadFullSizeContentView == false {
                 window.styleMask.remove(.fullSizeContentView)
