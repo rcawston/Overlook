@@ -22,6 +22,41 @@ struct OverlookApp: App {
         .windowResizability(.automatic)
         .commands {
             WindowSizeCommands()
+            InputModeCommands()
+        }
+    }
+}
+
+struct ViewOnlyModeKey: FocusedValueKey {
+    typealias Value = Binding<Bool>
+}
+
+extension FocusedValues {
+    /// The focused window's view-only flag. Only published while that window is connected.
+    var viewOnlyMode: Binding<Bool>? {
+        get { self[ViewOnlyModeKey.self] }
+        set { self[ViewOnlyModeKey.self] = newValue }
+    }
+}
+
+struct InputModeCommands: Commands {
+    @FocusedBinding(\.viewOnlyMode) private var isViewOnly: Bool?
+
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            Divider()
+            // ⌘⇧M is also intercepted by InputManager while keyboard capture is active,
+            // because the capture monitor consumes key events before menu key equivalents.
+            Toggle("View Only", isOn: Binding(
+                get: { isViewOnly ?? false },
+                set: { newValue in
+                    // Holding ⌘⇧M must not flip the mode back and forth.
+                    if let event = NSApp.currentEvent, event.type == .keyDown, event.isARepeat { return }
+                    isViewOnly = newValue
+                }
+            ))
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(isViewOnly == nil)
         }
     }
 }

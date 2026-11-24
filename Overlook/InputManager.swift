@@ -54,6 +54,9 @@ class InputManager: ObservableObject {
     private static let pasteChunkLength = 500
     
     @Published var isKeyboardCaptureEnabled = false
+    /// View-only gate: while set, keyboard and mouse capture cannot start, so no input
+    /// reaches the remote, whichever path tries to start capture.
+    @Published private(set) var isViewOnly = false
     @Published var isMouseCaptureEnabled = false
     /// Set once when a paste could not be delivered. The paste is never retried automatically.
     @Published var pasteErrorMessage: String?
@@ -99,6 +102,11 @@ class InputManager: ObservableObject {
         mouseModeRefreshTask?.cancel()
         mouseModeRefreshTask = nil
         glkvmClient = client
+        if isNewClient {
+            // A new client only comes from a connect or disconnect: every session starts in
+            // Control mode. Callers start capture after setting the client.
+            isViewOnly = false
+        }
         isGLKVMAbsoluteMouseMode = true
         pendingAbsoluteMouseMove = nil
         pendingRelativeMouseMove = nil
@@ -339,7 +347,18 @@ class InputManager: ObservableObject {
         return true
     }
     
+    /// Entering view-only stops capture through the regular stop paths, which release held
+    /// keys and buttons. Leaving it only lifts the gate; the caller resumes capture.
+    func setViewOnly(_ viewOnly: Bool) {
+        guard isViewOnly != viewOnly else { return }
+        isViewOnly = viewOnly
+        if viewOnly {
+            stopFullInputCapture()
+        }
+    }
+
     func startKeyboardCapture() {
+        guard !isViewOnly else { return }
         guard keyEventMonitor == nil else {
             isCapturing = true
             isKeyboardCaptureEnabled = true
@@ -350,9 +369,12 @@ class InputManager: ObservableObject {
         isKeyboardCaptureEnabled = true
         
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
-            self?.handleKeyEvent(event)
-            guard let self, self.isKeyboardCaptureEnabled else { return event }
-            return nil
+            guard let self else { return event }
+            // Decide before handling: a local shortcut such as ⌘⇧M stops capture while it
+            // handles its own event, which must still be consumed and not reach the menu.
+            let wasCapturing = self.isKeyboardCaptureEnabled
+            self.handleKeyEvent(event)
+            return wasCapturing ? nil : event
         }
     }
     
@@ -371,6 +393,7 @@ class InputManager: ObservableObject {
     }
     
     func startMouseCapture() {
+        guard !isViewOnly else { return }
         isCapturing = true
         isMouseCaptureEnabled = true
     }
@@ -407,6 +430,18 @@ class InputManager: ObservableObject {
             }
 
             if isKeyDown, modifiers.contains(.command) {
+                if isViewOnlyShortcut(event) {
+                    // Holding the shortcut must not flip the mode back and forth.
+                    guard !event.isARepeat else { return }
+                    // ⌘⇧M during capture always enters view-only mode, so the gate closes here
+                    // directly; leaving it goes through the View menu, where capture is off.
+                    // Capture stops before the key-up arrives, so the key-up is not suppressed.
+                    // Shift was already forwarded; stopping capture releases it with the other
+                    // held keys.
+                    prepareForLocalCommandShortcut()
+                    setViewOnly(true)
+                    return
+                }
                 if keyCode == 8 {
                     prepareForLocalCommandShortcut()
                     suppressedKeyUps.insert(keyCode)
@@ -502,6 +537,16 @@ class InputManager: ObservableObject {
         default:
             break
         }
+    }
+
+    /// Matches ⌘⇧M by character, like the View Only menu item's key equivalent, so the
+    /// same key enters and leaves view-only mode on every keyboard layout. With Command held,
+    /// `characters` comes from the ASCII-capable layout for non-Latin input sources.
+    private func isViewOnlyShortcut(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .shift, .option, .control]) == [.command, .shift] else {
+            return false
+        }
+        return [event.characters, event.charactersIgnoringModifiers].contains { $0?.lowercased() == "m" }
     }
 
     private func prepareForLocalCommandShortcut() {

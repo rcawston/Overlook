@@ -146,6 +146,19 @@ Once connected:
 - Keys, modifiers and mouse buttons still held down are released on the remote when Overlook loses focus (another window or app, e.g. `⌘Tab`), when input capture stops (opening Settings or the connections list, turning on OCR mode), and when the connection is closed, lost or reconnected. The remote never sees a stuck `⌘`/`Ctrl` or mouse button.
 - Standard UX flows like fullscreen work well for “monitor replacement” usage.
 
+### 4) View-only mode (watch or share without controlling)
+
+Press `⌘⇧M`, choose **View → View Only**, or use the toolbar button (mouse/eye icon) to switch the connection between **Control** and **View Only**. The menu item’s checkmark and the toolbar icon show the current mode; nothing is drawn over the video, so screen sharing stays clean.
+
+In view-only mode:
+
+- No keyboard, mouse, scroll or paste (`⌘V`) input reaches the remote machine. Switching stops capture through the regular capture-stop path.
+- Drag anywhere on the video to move the window. A plain click does nothing.
+- OCR selection still works when you enable it, and takes precedence over moving the window.
+- App and window shortcuts (`⌘Q`, `⌘W`, `⌘M`, …) act locally. `⌘C` no longer toggles OCR; use the toolbar button.
+
+Every new connection starts in Control mode. The mode is kept while connected to the same device (for example across Settings/Connections overlays, a video reconnect or a device settings change), and no path can resume input capture while it is on.
+
 ---
 
 ## Window size
@@ -244,6 +257,11 @@ Overlook includes a few “quality of life” shortcuts.
 
 - `⌘C`: toggles OCR selection mode (so you can “copy” from the remote screen).
 - `⌘V`: pastes macOS clipboard to the remote.
+- `⌘⇧M`: switches to view-only mode (input is not forwarded).
+
+### App shortcuts
+
+- `⌘⇧M`: toggles **View → View Only** (switches between Control and View Only).
 
 ### Menu bar global shortcuts
 

@@ -113,12 +113,17 @@ struct ContentView: View {
     }
     
     var body: some View {
+        sessionPresentations(sessionContent)
+    }
+
+    private var sessionContent: some View {
         ZStack(alignment: .trailing) {
             if isFullscreen {
                 VideoSurfaceView(
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isViewOnly: isViewOnly,
                     onReconnect: {
                         guard let device = kvmDeviceManager.connectedDevice else { return }
                         Task { @MainActor in
@@ -133,6 +138,7 @@ struct ContentView: View {
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isViewOnly: isViewOnly,
                     onReconnect: {
                         guard let device = kvmDeviceManager.connectedDevice else { return }
                         Task { @MainActor in
@@ -185,6 +191,8 @@ struct ContentView: View {
                             }
                             .disabled(!isConnected)
                             .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                            viewOnlyToggleButton
 
                             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                                 Image(systemName: "gearshape")
@@ -276,6 +284,7 @@ struct ContentView: View {
         .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize))
         .background(WindowTitleSetter(title: windowTitle))
         .background(WindowReferenceSetter(window: $windowRef))
+        .focusedSceneValue(\.viewOnlyMode, focusedViewOnlyBinding)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             applyAppAppearance()
@@ -344,6 +353,10 @@ struct ContentView: View {
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
+    }
+
+    private func sessionPresentations(_ content: some View) -> some View {
+        content
         .sheet(isPresented: $isShowingOCRResult) {
             OCRResultView(selectedText: $selectedText)
         }
@@ -402,33 +415,59 @@ struct ContentView: View {
             Text(connectionErrorMessage ?? "")
         }
         .toolbar {
-            if isFullscreen == false {
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: { showingConnections.toggle() }) {
-                        Image(systemName: "personalhotspot")
-                    }
-                    .help("Connections")
+            windowToolbar
+        }
+    }
 
-                    Button(action: { fitWindowToGuest() }) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(webRTCManager.videoSize == nil)
-                    .help("Fit window to guest")
-
-                    Button(action: { toggleOCR() }) {
-                        Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
-                    }
-                    .disabled(!isConnected)
-                    .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
-
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .disabled(!isConnected)
-                    .help("Settings")
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        if isFullscreen == false {
+            ToolbarItemGroup(placement: .automatic) {
+                Button(action: { showingConnections.toggle() }) {
+                    Image(systemName: "personalhotspot")
                 }
+                .help("Connections")
+
+                Button(action: { fitWindowToGuest() }) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .disabled(webRTCManager.videoSize == nil)
+                .help("Fit window to guest")
+
+                Button(action: { toggleOCR() }) {
+                    Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
+                }
+                .disabled(!isConnected)
+                .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+
+                viewOnlyToggleButton
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
+                    Image(systemName: "gearshape")
+                }
+                .disabled(!isConnected)
+                .help("Settings")
             }
         }
+    }
+
+    private var viewOnlyToggleButton: some View {
+        Button(action: { setViewOnly(!isViewOnly) }) {
+            Image(systemName: isViewOnly ? "eye" : "computermouse")
+        }
+        .disabled(!isConnected)
+        .help(isViewOnly ? "Switch to Control (⌘⇧M)" : "Switch to View Only (⌘⇧M)")
+    }
+
+    /// Published to the View menu only while connected, so the menu item is disabled otherwise.
+    private var focusedViewOnlyBinding: Binding<Bool>? {
+        guard isConnected else { return nil }
+        return Binding(get: { inputManager.isViewOnly }, set: { setViewOnly($0) })
+    }
+
+    /// The view-only gate lives in the shared InputManager.
+    private var isViewOnly: Bool {
+        inputManager.isViewOnly
     }
 
     private func connectToDevice(_ device: KVMDevice, password: String? = nil) {
@@ -572,6 +611,24 @@ struct ContentView: View {
         window.setFrame(newFrame, display: true, animate: true)
     }
 
+    /// View-only mode closes InputManager's gate, which stops keyboard and mouse capture
+    /// through the regular stop paths, so no keyboard, mouse, scroll or paste input reaches
+    /// the remote. Control mode resumes capture, unless an overlay currently pauses it.
+    @MainActor
+    private func setViewOnly(_ viewOnly: Bool) {
+        guard inputManager.isViewOnly != viewOnly else { return }
+        inputManager.setViewOnly(viewOnly)
+
+        guard !viewOnly, isConnected else { return }
+
+        if isInputCapturePausedForUI {
+            pausedCaptureKeyboardWasEnabled = true
+            pausedCaptureMouseWasEnabled = true
+        } else {
+            inputManager.startFullInputCapture()
+        }
+    }
+
     @MainActor
     private func updateInputCaptureForUIOverlays() {
         // The paste error alert counts too, so its keyboard input is not sent to the remote.
@@ -596,7 +653,7 @@ struct ContentView: View {
 
         guard isInputCapturePausedForUI else { return }
 
-        if isConnected {
+        if isConnected, !isViewOnly {
             if let wasKeyboard = pausedCaptureKeyboardWasEnabled {
                 if wasKeyboard {
                     inputManager.startKeyboardCapture()
