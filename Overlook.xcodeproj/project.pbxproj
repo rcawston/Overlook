@@ -38,6 +38,7 @@
 		02000022 /* WindowSizeMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSizeMenu.swift; sourceTree = "<group>"; };
 		02000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		02000005 /* Overlook.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Overlook.entitlements; sourceTree = "<group>"; };
+		02000023 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		02000006 /* WebRTCManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCManager.swift; sourceTree = "<group>"; };
 		02000007 /* InputManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputManager.swift; sourceTree = "<group>"; };
 		02000008 /* OCRManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRManager.swift; sourceTree = "<group>"; };
@@ -111,6 +112,7 @@
 				02000011 /* JSONValue.swift */,
 				02000003 /* Assets.xcassets */,
 				02000005 /* Overlook.entitlements */,
+				02000023 /* Info.plist */,
 			);
 			path = Overlook;
 			sourceTree = "<group>";
@@ -363,6 +365,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Overlook/Info.plist;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Overlook needs microphone access to send audio to the remote device.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -398,6 +401,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Overlook/Info.plist;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Overlook needs microphone access to send audio to the remote device.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (

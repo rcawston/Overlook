@@ -112,6 +112,19 @@ From the menu bar:
 
 - Use the Overlook status item to scan and connect quickly.
 
+#### Connecting over Tailscale
+
+To reach a KVM through Tailscale, use **Manual Connect…** with its Tailscale address (`100.x.y.z`) or its
+MagicDNS name.
+
+GLKVM devices serve a self-signed certificate that has expired. macOS App Transport Security (ATS) rejects such a
+certificate before Overlook’s own handling runs, except for local network addresses, and Tailscale addresses and
+names do not count as local. Overlook therefore disables ATS (`NSAllowsArbitraryLoads` in `Overlook/Info.plist`).
+This does more than relax certificate checks: it also allows plain, unencrypted HTTP connections to any host.
+Overlook already skips certificate validation for KVM connections, so the device’s identity is not verified on
+any network. Certificate pinning (a follow-up to [#23](https://github.com/rcawston/Overlook/pull/23)) is the planned
+mitigation.
+
 ### 2) Connect
 
 Select a device, then connect.
