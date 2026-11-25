@@ -1035,8 +1035,11 @@ extension GLKVMClient {
 }
 
 extension GLKVMClient {
+    /// `stream` tells kvmd whether this client watches the video. kvmd runs the video streamer
+    /// only while at least one socket has it enabled.
     func makeWebSocketClient(stream: Bool = true) throws -> WebSocketClient {
-        let url = try websocketURL()
+        var url = try websocketURL()
+        url.append(queryItems: [URLQueryItem(name: "stream", value: stream ? "1" : "0")])
 
         var request = URLRequest(url: url)
         if let authToken, !authToken.isEmpty {
@@ -1053,6 +1056,8 @@ extension GLKVMClient {
             case decodingFailed
         }
 
+        /// Finishes when the socket is closed, either by `disconnect()` or because the
+        /// connection failed or the device closed it.
         nonisolated let events: AsyncStream<GLKVMWebSocketEvent>
         private let continuation: AsyncStream<GLKVMWebSocketEvent>.Continuation
 
@@ -1082,7 +1087,7 @@ extension GLKVMClient {
 
             receiveTask = Task { [weak self] in
                 guard let self else { return }
-                await self.receiveLoop()
+                await self.receiveLoop(ws)
             }
 
             pingTask = Task { [weak self] in
@@ -1090,9 +1095,31 @@ extension GLKVMClient {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     if Task.isCancelled { break }
-                    try? await self.send(eventType: "ping")
+                    do {
+                        try await self.send(eventType: "ping")
+                    } catch {
+                        await self.handleClosed(ws)
+                        break
+                    }
                 }
             }
+        }
+
+        /// Cleans up after the connection ended without `disconnect()`. Does nothing if `ws`
+        /// is no longer the current task.
+        private func handleClosed(_ ws: URLSessionWebSocketTask) {
+            guard task === ws else { return }
+
+            receiveTask?.cancel()
+            receiveTask = nil
+
+            pingTask?.cancel()
+            pingTask = nil
+
+            ws.cancel(with: .goingAway, reason: nil)
+            task = nil
+
+            continuation.finish()
         }
 
         func disconnect() {
@@ -1195,12 +1222,11 @@ extension GLKVMClient {
             try await sendBinary(payload)
         }
 
-        private func receiveLoop() async {
+        private func receiveLoop(_ ws: URLSessionWebSocketTask) async {
             let decoder = JSONDecoder()
             while !Task.isCancelled {
-                guard let task else { break }
                 do {
-                    let msg = try await task.receive()
+                    let msg = try await ws.receive()
                     switch msg {
                     case .string(let text):
                         guard let data = text.data(using: .utf8) else { continue }
@@ -1218,6 +1244,7 @@ extension GLKVMClient {
                     break
                 }
             }
+            handleClosed(ws)
         }
     }
 }

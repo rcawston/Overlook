@@ -13,6 +13,7 @@ class InputManager: ObservableObject {
     private var webRTCManager: WebRTCManager?
     private var glkvmClient: GLKVMClient?
     private var glkvmWebSocketClient: GLKVMClient.WebSocketClient?
+    private var glkvmWebSocketWatchTask: Task<Void, Never>?
     private var keyEventMonitor: Any?
     private var mouseEventMonitor: Any?
     private var isCapturing = false
@@ -53,6 +54,9 @@ class InputManager: ObservableObject {
     /// and cancels typing if the request times out, so long pastes are sent in chunks.
     private static let pasteChunkLength = 500
     
+    /// Set when the device WebSocket closed on its own, e.g. because kvmd restarted. Keyboard and
+    /// mouse input cannot reach the device until the socket is rebuilt.
+    @Published private(set) var isGLKVMWebSocketLost = false
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
     /// Set once when a paste could not be delivered. The paste is never retried automatically.
@@ -107,7 +111,8 @@ class InputManager: ObservableObject {
             return
         }
         if isNewClient {
-            releaseHeldInput()
+            // The socket belongs to the previous client and its session.
+            disconnectGLKVMWebSocket()
         }
         Task { [weak self] in
             await self?.reconnectGLKVMWebSocketIfNeeded()
@@ -270,6 +275,9 @@ class InputManager: ObservableObject {
         let release = releaseHeldInput()
         let ws = glkvmWebSocketClient
         glkvmWebSocketClient = nil
+        glkvmWebSocketWatchTask?.cancel()
+        glkvmWebSocketWatchTask = nil
+        isGLKVMWebSocketLost = false
         Task {
             await release?.value
             await ws?.disconnect()
@@ -899,6 +907,15 @@ class InputManager: ObservableObject {
 
         mouseModeRefreshTask?.cancel()
         mouseModeRefreshTask = nil
+
+        glkvmWebSocketWatchTask?.cancel()
+        glkvmWebSocketWatchTask = nil
+    }
+
+    /// Replaces the device WebSocket with a new one, even if the current one still looks open.
+    func reconnectGLKVMWebSocket() async {
+        disconnectGLKVMWebSocket()
+        await reconnectGLKVMWebSocketIfNeeded()
     }
 
     private func reconnectGLKVMWebSocketIfNeeded() async {
@@ -910,9 +927,27 @@ class InputManager: ObservableObject {
         }
 
         if glkvmWebSocketClient == nil {
-            let ws = try? client.makeWebSocketClient(stream: false)
+            // Ask for the stream: besides carrying input, this socket keeps the streamer running.
+            guard let ws = try? client.makeWebSocketClient(stream: true) else { return }
             glkvmWebSocketClient = ws
-            await ws?.connect()
+            isGLKVMWebSocketLost = false
+            watchGLKVMWebSocket(ws)
+            await ws.connect()
+        }
+    }
+
+    /// Notices when the device closes the socket or the connection fails.
+    private func watchGLKVMWebSocket(_ ws: GLKVMClient.WebSocketClient) {
+        glkvmWebSocketWatchTask?.cancel()
+        glkvmWebSocketWatchTask = Task { [weak self] in
+            for await _ in ws.events {}
+            guard !Task.isCancelled, let self, self.glkvmWebSocketClient === ws else { return }
+            self.glkvmWebSocketWatchTask = nil
+            self.stopMouseMoveSender()
+            self.glkvmWebSocketClient = nil
+            // Nothing can be released through a closed socket; this only clears the tracking.
+            self.releaseHeldInput()
+            self.isGLKVMWebSocketLost = true
         }
     }
 

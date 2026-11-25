@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var connectionErrorMessage: String?
 
     @State private var suppressDeviceAutoConnect = false
+    @State private var isReconnecting = false
 
     @State private var showingConnections = false
     @State private var didAutoOpenConnections = false
@@ -119,11 +120,9 @@ struct ContentView: View {
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isReconnecting: isReconnecting,
                     onReconnect: {
-                        guard let device = kvmDeviceManager.connectedDevice else { return }
-                        Task { @MainActor in
-                            await webRTCManager.reconnect(to: device)
-                        }
+                        reconnectToConnectedDevice()
                     }
                 )
                 .ignoresSafeArea()
@@ -133,11 +132,9 @@ struct ContentView: View {
                     isOCRModeEnabled: $isOCRModeEnabled,
                     selectedText: $selectedText,
                     isShowingOCRResult: $isShowingOCRResult,
+                    isReconnecting: isReconnecting,
                     onReconnect: {
-                        guard let device = kvmDeviceManager.connectedDevice else { return }
-                        Task { @MainActor in
-                            await webRTCManager.reconnect(to: device)
-                        }
+                        reconnectToConnectedDevice()
                     }
                 )
                 .allowsHitTesting(!showingSettings)
@@ -455,6 +452,8 @@ struct ContentView: View {
 
  #if canImport(WebRTC)
                 do {
+                    // After a re-login from Reconnect, the previous session is still set up.
+                    webRTCManager.disconnect()
                     try await webRTCManager.connect(to: connectedDevice)
                 } catch {
                     print("WebRTC connect failed (API is still connected): \(error)")
@@ -475,6 +474,37 @@ struct ContentView: View {
                 }
                 return
             }
+        }
+    }
+
+    /// Rebuilds the device WebSocket (input, and what keeps the streamer running) and the
+    /// WebRTC session. If the device no longer accepts the session token, e.g. after kvmd
+    /// restarted, it goes through the normal connect path instead, which asks for the password.
+    private func reconnectToConnectedDevice() {
+        guard !isReconnecting, let device = kvmDeviceManager.connectedDevice else { return }
+        let client = kvmDeviceManager.glkvmClient
+        isReconnecting = true
+        Task { @MainActor in
+            defer { isReconnecting = false }
+            if let client, await isSessionRejected(by: client) {
+                connectToDevice(device)
+                return
+            }
+            await inputManager.reconnectGLKVMWebSocket()
+            await webRTCManager.reconnect(to: device)
+        }
+    }
+
+    /// True only if the device answered and refused the token. Other failures, such as the
+    /// device still restarting, are left to the reconnect to report.
+    private func isSessionRejected(by client: GLKVMClient) async -> Bool {
+        do {
+            try await client.authCheck()
+            return false
+        } catch GLKVMClient.ClientError.httpError(let statusCode, _) {
+            return statusCode == 401 || statusCode == 403
+        } catch {
+            return false
         }
     }
 

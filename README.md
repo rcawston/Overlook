@@ -144,6 +144,7 @@ Once connected:
 - Mouse movement, clicks, dragging, and scroll are forwarded.
 - Keyboard is captured and forwarded.
 - Keys, modifiers and mouse buttons still held down are released on the remote when Overlook loses focus (another window or app, e.g. `⌘Tab`), when input capture stops (opening Settings or the connections list, turning on OCR mode), and when the connection is closed, lost or reconnected. The remote never sees a stuck `⌘`/`Ctrl` or mouse button.
+- If the device drops the connection, for example when its web server restarts, Overlook shows **Connection Lost**, also when only keyboard and mouse input is cut off. **Reconnect** rebuilds both the video session and the device WebSocket that carries keyboard and mouse input. If the device no longer accepts the session (kvmd restarted), Overlook asks for the password again.
 - Standard UX flows like fullscreen work well for “monitor replacement” usage.
 
 ---
