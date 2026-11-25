@@ -402,25 +402,10 @@ struct ContentView: View {
         } message: {
             Text(connectionErrorMessage ?? "")
         }
-        .alert(
-            "Device Certificate Changed",
-            isPresented: Binding(
-                get: { pendingCertificateChange != nil },
-                set: { if !$0 { pendingCertificateChange = nil } }
-            ),
-            presenting: pendingCertificateChange
-        ) { change in
-            Button("Trust New Certificate", role: .destructive) {
-                pendingCertificateChange = nil
-                kvmDeviceManager.trustNewCertificate(change.mismatch)
-                connectToDevice(change.device, password: change.password)
-            }
-            Button("Cancel", role: .cancel) {
-                pendingCertificateChange = nil
-            }
-        } message: { change in
-            Text(change.mismatch.warningMessage)
-        }
+        .modifier(CertificateChangeAlert(change: $pendingCertificateChange) { change in
+            kvmDeviceManager.trustNewCertificate(change.mismatch)
+            connectToDevice(change.device, password: change.password)
+        })
         .toolbar {
             if isFullscreen == false {
                 ToolbarItemGroup(placement: .automatic) {
@@ -646,6 +631,34 @@ private struct PendingCertificateChange {
     let device: KVMDevice
     let password: String?
     let mismatch: DeviceCertificateMismatch
+}
+
+/// Warns that a device's certificate changed and offers to trust the new one.
+/// A separate modifier keeps `ContentView.body` small enough to type-check quickly.
+private struct CertificateChangeAlert: ViewModifier {
+    @Binding var change: PendingCertificateChange?
+    let onTrust: (PendingCertificateChange) -> Void
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Device Certificate Changed",
+            isPresented: Binding(
+                get: { change != nil },
+                set: { if !$0 { change = nil } }
+            ),
+            presenting: change
+        ) { pending in
+            Button("Trust New Certificate", role: .destructive) {
+                change = nil
+                onTrust(pending)
+            }
+            Button("Cancel", role: .cancel) {
+                change = nil
+            }
+        } message: { pending in
+            Text(pending.mismatch.warningMessage)
+        }
+    }
 }
 
 private struct WindowReferenceSetter: NSViewRepresentable {
