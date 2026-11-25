@@ -65,6 +65,26 @@ struct VideoSurfaceView: View {
                         }
                     )
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                } else if let failure = webRTCManager.connectFailureMessage {
+                    VStack(spacing: 10) {
+                        Text("Video Connection Failed")
+                            .font(.headline)
+
+                        Text(failure)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+
+                        Button("Reconnect") {
+                            onReconnect()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(14)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding()
                 } else {
                     Text("No Video Stream")
                         .foregroundColor(.white)
