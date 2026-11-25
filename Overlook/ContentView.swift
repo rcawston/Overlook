@@ -179,6 +179,7 @@ struct ContentView: View {
                             }
                             .disabled(webRTCManager.videoSize == nil)
                             .help("Fit window to guest")
+                            .accessibilityLabel("Fit window to guest")
 
                             Button(action: { toggleOCR() }) {
                                 Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
@@ -414,6 +415,7 @@ struct ContentView: View {
                     }
                     .disabled(webRTCManager.videoSize == nil)
                     .help("Fit window to guest")
+                    .accessibilityLabel("Fit window to guest")
 
                     Button(action: { toggleOCR() }) {
                         Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
@@ -569,7 +571,8 @@ struct ContentView: View {
         var newFrame = currentFrame
         newFrame.size = NSSize(width: desiredLayoutW + deltaW, height: desiredLayoutH + deltaH)
         newFrame.origin.y += currentFrame.size.height - newFrame.size.height
-        window.setFrame(newFrame, display: true, animate: true)
+        // Keep the top-left corner unless the larger window would stick out of the screen.
+        window.setFrame(WindowSizeController.frame(newFrame, keptOnScreenOf: window), display: true, animate: true)
     }
 
     @MainActor

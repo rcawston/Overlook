@@ -159,7 +159,7 @@ Once connected:
 - Sizes that would not fit the screen (excluding menu bar and Dock), or that are smaller than the window allows, are disabled instead of being silently shrunk. The choices update when the window moves to another display or the video resolution changes.
 - The window keeps its top-left corner. It only moves if the new size would otherwise extend past the edge of the screen.
 - The menu is unavailable while there is no video and in full screen.
-- The toolbar’s **Fit window to guest** button is unchanged.
+- The toolbar’s **Fit window to guest** button makes the video area as many points wide and high as the video has pixels, shrunk to fit the screen if needed. Like the menu, it keeps the top-left corner and only moves the window if it would otherwise extend past the edge of the screen.
 
 These controls only change the local window size. They never change the remote computer’s resolution.
 

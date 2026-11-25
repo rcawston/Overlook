@@ -111,15 +111,21 @@ final class WindowSizeController: ObservableObject {
             width: preset.pointSize.width + frame.width - videoArea.width,
             height: preset.pointSize.height + frame.height - videoArea.height
         )
-        var newFrame = NSRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height)
+        let newFrame = NSRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height)
 
         // The size fits the visible frame; only move the window if it would stick out of it.
-        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
-            newFrame.origin.x = min(max(newFrame.minX, visible.minX), visible.maxX - newFrame.width)
-            newFrame.origin.y = min(max(newFrame.minY, visible.minY), visible.maxY - newFrame.height)
-        }
+        window.setFrame(Self.frame(newFrame, keptOnScreenOf: window), display: true, animate: true)
+    }
 
-        window.setFrame(newFrame, display: true, animate: true)
+    /// Moves `frame` into the visible frame (without menu bar and Dock) of the window's
+    /// display, shifting it only as far as needed. A frame larger than the visible frame keeps
+    /// its top-left corner inside it.
+    static func frame(_ frame: NSRect, keptOnScreenOf window: NSWindow) -> NSRect {
+        guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return frame }
+        var result = frame
+        result.origin.x = max(min(frame.minX, visible.maxX - frame.width), visible.minX)
+        result.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        return result
     }
 
     private func refresh() {
