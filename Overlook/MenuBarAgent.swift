@@ -362,7 +362,7 @@ class MenuBarAgent: NSObject, ObservableObject {
             try await webRTCManager.connect(to: connectedDevice)
         } catch {
             // still consider ourselves connected at the API layer
-            showError(title: "WebRTC connect failed", message: String(describing: error))
+            showError(title: "WebRTC connect failed", message: WebRTCError.connectFailureMessage(for: error))
         }
 #endif
     }

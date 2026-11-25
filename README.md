@@ -299,6 +299,11 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
 - Try toggling reconnect.
 - Check the window title stats (bitrate/fps) to confirm frames are arriving.
 
+### “Video Connection Failed” after connecting
+
+- Overlook is connected to the device, but the video could not be set up. The window shows the reason and a **Reconnect** button.
+- If it reports HTTP 502 from `/janus/ws`, the device’s WebRTC video service is not running. This happens when **Video → Transfer** is set to “WebRTC (Native)” in the device’s web UI. Switch it to “WebRTC”, then click **Reconnect**. Overlook does not change this setting itself, because an open web UI sets it again.
+
 ### “OCR doesn’t detect text”
 
 - Increase stream quality (higher bitrate helps OCR).

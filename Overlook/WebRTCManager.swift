@@ -92,7 +92,9 @@ class WebRTCManager: NSObject, ObservableObject {
     @Published var isStreamStalled = false
     @Published var lastDisconnectReason: String?
     @Published var lastVideoFrameAgeSeconds: Int?
-    
+    /// Set when the last connect attempt failed before any video arrived; shown in place of the video.
+    @Published var connectFailureMessage: String?
+
     private var peerConnection: RTCPeerConnection?
     private var audioPeerConnection: RTCPeerConnection?
     private var videoTrack: RTCVideoTrack?
@@ -318,6 +320,7 @@ class WebRTCManager: NSObject, ObservableObject {
         isStreamStalled = false
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
+        connectFailureMessage = nil
         setLastVideoFrameTime(nil)
         connectedIceTime = nil
         hasEverConnectedToStream = false
@@ -377,6 +380,7 @@ class WebRTCManager: NSObject, ObservableObject {
             let reason = "Connect failed: \(String(describing: error))"
             disconnect()
             lastDisconnectReason = reason
+            connectFailureMessage = WebRTCError.connectFailureMessage(for: error)
             throw error
         }
     }
@@ -458,12 +462,21 @@ class WebRTCManager: NSObject, ObservableObject {
 
         // Janus session setup
         let createTransaction = makeJanusTransaction()
-        try await sendJanusMessage([
-            "janus": "create",
-            "transaction": createTransaction,
-        ])
+        let createResponse: [String: Any]
+        do {
+            try await sendJanusMessage([
+                "janus": "create",
+                "transaction": createTransaction,
+            ])
 
-        let createResponse = try await waitForJanusTransaction(createTransaction)
+            createResponse = try await waitForJanusTransaction(createTransaction)
+        } catch {
+            // The first send fails if the WebSocket handshake was refused; report the HTTP status then.
+            if let response = webSocketTask?.response as? HTTPURLResponse, response.statusCode != 101 {
+                throw WebRTCError.signalingRejected(statusCode: response.statusCode)
+            }
+            throw error
+        }
         guard let data = createResponse["data"] as? [String: Any],
               let sessionId = data["id"] as? Int else {
             throw WebRTCError.signalingConnectionLost
@@ -1222,6 +1235,7 @@ class WebRTCManager: NSObject, ObservableObject {
         isStreamStalled = false
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
+        connectFailureMessage = nil
         setLastVideoFrameTime(nil)
         connectedIceTime = nil
         latency = 0
@@ -1494,7 +1508,20 @@ enum WebRTCError: Error {
     case factoryNotInitialized
     case invalidSignalingURL
     case signalingConnectionLost
+    case signalingRejected(statusCode: Int)
     case peerConnectionFailed
+
+    /// Text for the main window and the menu bar alert when the video connection could not be set up.
+    static func connectFailureMessage(for error: Error) -> String {
+        guard case WebRTCError.signalingRejected(let statusCode) = error else {
+            return String(describing: error)
+        }
+        if statusCode == 502 {
+            // GLKVM stops Janus when Video → Transfer is "WebRTC (Native)", so /janus/ws answers 502.
+            return "The device's WebRTC video service is not running (HTTP 502 from /janus/ws). This happens when Video → Transfer is set to \"WebRTC (Native)\". Switch Video → Transfer to \"WebRTC\" in the device's web UI, then reconnect."
+        }
+        return "The device refused the video signaling connection (HTTP \(statusCode) from /janus/ws)."
+    }
 }
 
 struct InputMessage: Codable {
