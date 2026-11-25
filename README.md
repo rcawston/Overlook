@@ -137,6 +137,28 @@ the preferences (a token whose Keychain write fails stays until the next launch 
 keeps its format, so older versions can still read it, but they will ask for the password once because they
 cannot read the Keychain.
 
+#### Certificate pinning
+
+GLKVM devices serve a self-signed certificate that macOS cannot verify, so Overlook pins it on first use instead.
+The first time a connection to a `host:port` succeeds, Overlook saves the SHA-256 fingerprint of the device's
+certificate. Every later connection to that address (API and login, the HID WebSocket and WebRTC signaling) must
+present the same certificate. Devices saved by earlier versions are pinned silently on their next successful
+connection. Pins are stored in Overlook's preferences next to the saved device list; Forget Device removes the pin.
+
+If the certificate is different, Overlook stops the connection during the TLS handshake, before any token or
+password is sent, and shows **Device Certificate Changed** with the address and the start and end of both
+fingerprints. **Cancel** leaves the device disconnected. **Trust New Certificate** replaces the pin with the
+certificate the device just presented and connects.
+
+A firmware update, a reset or regenerating the certificate on the device changes the fingerprint, so the warning
+is expected after one of those. If none of them happened, another device may be answering at that address; don't
+trust it. To check, compare the fingerprint with the one on the device itself, for example over SSH with
+`openssl x509 -in <certificate file> -noout -fingerprint -sha256`; the warning shows the first and last four
+bytes of that value.
+
+Plain HTTP (ports 80 and 8080) has no certificate, so it cannot be pinned: anyone on the network path can read
+and change the traffic, including the session token and the password. Use HTTPS outside a network you trust.
+
 ### 3) Control the remote machine
 
 Once connected:
@@ -344,7 +366,7 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
 
 ### Security notes
 
-- The app currently allows insecure TLS for device connections (useful for devices with self-signed certs).
+- The app accepts the self-signed certificates of KVM devices, pinned on first use (see [Certificate pinning](#certificate-pinning)).
 - Treat your `auth_token` like a password. Overlook stores it only in the macOS Keychain.
 
 ---
