@@ -152,9 +152,9 @@ certificate the device just presented and connects.
 
 A firmware update, a reset or regenerating the certificate on the device changes the fingerprint, so the warning
 is expected after one of those. If none of them happened, another device may be answering at that address; don't
-trust it. To check, compare the fingerprint with the one on the device itself, for example over SSH with
-`openssl x509 -in <certificate file> -noout -fingerprint -sha256`; the warning shows the first and last four
-bytes of that value.
+trust it. To check, compare the fingerprint with the one on the device itself. On a GLKVM, run this over SSH:
+`openssl x509 -in /etc/kvmd/user/ssl/server.crt -noout -fingerprint -sha256`. The warning shows the first and
+last four bytes of that value.
 
 Plain HTTP (ports 80 and 8080) has no certificate, so it cannot be pinned: anyone on the network path can read
 and change the traffic, including the session token and the password. Use HTTPS outside a network you trust.
