@@ -332,20 +332,47 @@ class MenuBarAgent: NSObject, ObservableObject {
         do {
             let connected = try await kvmDeviceManager.connectToDevice(device)
             await finishSessionConnect(connected)
+        } catch let mismatch as DeviceCertificateMismatch {
+            if confirmTrustingNewCertificate(mismatch) {
+                await connectSession(to: device)
+            }
         } catch {
             if let kvmError = error as? KVMError, kvmError == .authenticationFailed {
                 guard let password = promptForPassword(deviceName: device.name) else { return }
-                do {
-                    let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
-                    await finishSessionConnect(connected)
-                } catch {
-                    showError(title: "Failed to connect", message: String(describing: error))
-                }
+                await connectSession(to: device, password: password)
                 return
             }
 
             showError(title: "Failed to connect", message: String(describing: error))
         }
+    }
+
+    private func connectSession(to device: KVMDevice, password: String) async {
+        do {
+            let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
+            await finishSessionConnect(connected)
+        } catch let mismatch as DeviceCertificateMismatch {
+            if confirmTrustingNewCertificate(mismatch) {
+                await connectSession(to: device, password: password)
+            }
+        } catch {
+            showError(title: "Failed to connect", message: String(describing: error))
+        }
+    }
+
+    /// Shows the certificate warning. Returns true, with the new certificate pinned, if the
+    /// user chose to trust it.
+    private func confirmTrustingNewCertificate(_ mismatch: DeviceCertificateMismatch) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Device Certificate Changed"
+        alert.informativeText = mismatch.warningMessage
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Trust New Certificate")
+
+        guard alert.runModal() == .alertSecondButtonReturn else { return false }
+        kvmDeviceManager.trustNewCertificate(mismatch)
+        return true
     }
 
     private func finishSessionConnect(_ connectedDevice: KVMDevice) async {
@@ -444,12 +471,7 @@ class MenuBarAgent: NSObject, ObservableObject {
                 await connectSession(to: device)
             } else {
                 showMainWindow()
-                do {
-                    let connected = try await kvmDeviceManager.connectToDevice(device, password: password)
-                    await finishSessionConnect(connected)
-                } catch {
-                    showError(title: "Failed to connect", message: String(describing: error))
-                }
+                await connectSession(to: device, password: password)
             }
         }
     }

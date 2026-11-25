@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var pendingPasswordDevice: KVMDevice?
     @State private var pendingPassword = ""
     @State private var connectionErrorMessage: String?
+    @State private var pendingCertificateChange: PendingCertificateChange?
 
     @State private var suppressDeviceAutoConnect = false
 
@@ -401,6 +402,10 @@ struct ContentView: View {
         } message: {
             Text(connectionErrorMessage ?? "")
         }
+        .modifier(CertificateChangeAlert(change: $pendingCertificateChange) { change in
+            kvmDeviceManager.trustNewCertificate(change.mismatch)
+            connectToDevice(change.device, password: change.password)
+        })
         .toolbar {
             if isFullscreen == false {
                 ToolbarItemGroup(placement: .automatic) {
@@ -460,6 +465,11 @@ struct ContentView: View {
                     print("WebRTC connect failed (API is still connected): \(error)")
                 }
  #endif
+            } catch let mismatch as DeviceCertificateMismatch {
+                await MainActor.run {
+                    isConnected = false
+                    pendingCertificateChange = PendingCertificateChange(device: device, password: password, mismatch: mismatch)
+                }
             } catch {
                 if let kvmError = error as? KVMError, kvmError == .authenticationFailed {
                     await MainActor.run {
@@ -612,6 +622,42 @@ struct ContentView: View {
         pausedCaptureKeyboardWasEnabled = nil
         pausedCaptureMouseWasEnabled = nil
         isInputCapturePausedForUI = false
+    }
+}
+
+/// A connection stopped because the device's certificate changed, kept so that
+/// "Trust New Certificate" can retry it with the same password.
+private struct PendingCertificateChange {
+    let device: KVMDevice
+    let password: String?
+    let mismatch: DeviceCertificateMismatch
+}
+
+/// Warns that a device's certificate changed and offers to trust the new one.
+/// A separate modifier keeps `ContentView.body` small enough to type-check quickly.
+private struct CertificateChangeAlert: ViewModifier {
+    @Binding var change: PendingCertificateChange?
+    let onTrust: (PendingCertificateChange) -> Void
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Device Certificate Changed",
+            isPresented: Binding(
+                get: { change != nil },
+                set: { if !$0 { change = nil } }
+            ),
+            presenting: change
+        ) { pending in
+            Button("Trust New Certificate", role: .destructive) {
+                change = nil
+                onTrust(pending)
+            }
+            Button("Cancel", role: .cancel) {
+                change = nil
+            }
+        } message: { pending in
+            Text(pending.mismatch.warningMessage)
+        }
     }
 }
 

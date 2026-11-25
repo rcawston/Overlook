@@ -44,29 +44,6 @@ struct InputEvent: Codable {
 #if canImport(WebRTC)
 @MainActor
 class WebRTCManager: NSObject, ObservableObject {
-    private final class SessionDelegate: NSObject, URLSessionDelegate {
-        let allowInsecureTLS: Bool
-
-        init(allowInsecureTLS: Bool) {
-            self.allowInsecureTLS = allowInsecureTLS
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            guard allowInsecureTLS,
-                  challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-                  let trust = challenge.protectionSpace.serverTrust else {
-                completionHandler(.performDefaultHandling, nil)
-                return
-            }
-
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        }
-    }
-
     @Published var videoView: RTCMTLNSVideoView?
     @Published var isConnected = false
     @Published var latency: Int = 0
@@ -141,7 +118,6 @@ class WebRTCManager: NSObject, ObservableObject {
     private let streamStallThresholdSeconds: CFTimeInterval = 3.0
     private let initialFrameTimeoutSeconds: CFTimeInterval = 5.0
     
-    private let allowInsecureTLS = true
     private var signalingSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
 
@@ -438,7 +414,9 @@ class WebRTCManager: NSObject, ObservableObject {
         print("WebRTC signaling connect: \(url.absoluteString)")
 
         let config = URLSessionConfiguration.default
-        let session = URLSession(configuration: config, delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS), delegateQueue: nil)
+        // Checks the device's certificate against its pin before the token cookie is sent.
+        let trustDelegate = DeviceTLSDelegate(host: device.host, port: device.port)
+        let session = URLSession(configuration: config, delegate: trustDelegate, delegateQueue: nil)
         signalingSession = session
 
         var request = URLRequest(url: url)
@@ -458,10 +436,17 @@ class WebRTCManager: NSObject, ObservableObject {
 
         // Janus session setup
         let createTransaction = makeJanusTransaction()
-        try await sendJanusMessage([
-            "janus": "create",
-            "transaction": createTransaction,
-        ])
+        do {
+            try await sendJanusMessage([
+                "janus": "create",
+                "transaction": createTransaction,
+            ])
+        } catch {
+            if let mismatch = trustDelegate.mismatch {
+                throw mismatch
+            }
+            throw error
+        }
 
         let createResponse = try await waitForJanusTransaction(createTransaction)
         guard let data = createResponse["data"] as? [String: Any],

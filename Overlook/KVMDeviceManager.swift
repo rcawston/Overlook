@@ -17,26 +17,12 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     private var scanTimer: Timer?
     private var deviceDiscoverySessions: [NWBrowser] = []
 
-    private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-               let trust = challenge.protectionSpace.serverTrust {
-                completionHandler(.useCredential, URLCredential(trust: trust))
-                return
-            }
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-
+    // Discovery probes send no credentials, so they accept any certificate and pin nothing.
     private let probeSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 2
         config.timeoutIntervalForResource = 3
-        return URLSession(configuration: config, delegate: InsecureTLSDelegate(), delegateQueue: nil)
+        return URLSession(configuration: config, delegate: DeviceTLSDelegate.unpinned(), delegateQueue: nil)
     }()
 
     private let commonProbeTargets: [(host: String, port: Int)] = [
@@ -630,6 +616,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         Task.detached {
             DeviceTokenStore.delete(account: key)
         }
+        DeviceCertificatePins.removePin(host: host, port: port)
 
         availableDevices.removeAll { $0.host == host && $0.port == port }
         if connectedDevice?.host == host, connectedDevice?.port == port {
@@ -674,6 +661,9 @@ final class KVMDeviceManager: NSObject, ObservableObject {
 
         do {
             try await client.authCheck()
+        } catch let mismatch as DeviceCertificateMismatch {
+            // Stopped during the TLS handshake: no token was sent, and no password must be.
+            throw mismatch
         } catch {
             if let password, !password.isEmpty {
                 let token = try await client.authLogin(user: user, password: password)
@@ -690,11 +680,23 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             }
         }
 
+        // Trust on first use: pin the certificate of the first successful connection.
+        if DeviceCertificatePins.pin(host: finalDevice.host, port: finalDevice.port) == nil,
+           let fingerprint = client.serverCertificateFingerprint {
+            DeviceCertificatePins.setPin(fingerprint, host: finalDevice.host, port: finalDevice.port)
+        }
+
         let tokenInKeychain = await storeToken(of: finalDevice)
         let persisted = persistDevice(finalDevice, tokenInKeychain: tokenInKeychain)
         connectedDevice = persisted
         glkvmClient = client
         return persisted
+    }
+
+    /// Replaces the pin with the certificate the device presented in `mismatch`. Only that exact
+    /// certificate is trusted; if the device presents yet another one, the warning appears again.
+    func trustNewCertificate(_ mismatch: DeviceCertificateMismatch) {
+        DeviceCertificatePins.setPin(mismatch.presentedFingerprint, host: mismatch.host, port: mismatch.port)
     }
 
     /// Saves the device's token in the Keychain off the main thread, so a Keychain
@@ -1100,5 +1102,174 @@ enum DeviceTokenStore {
 
     private static func log(_ operation: String, _ status: OSStatus) {
         NSLog("[Overlook keychain] token %@ failed: %@", operation, "\(status)")
+    }
+}
+
+// MARK: - Certificate pinning
+
+/// SHA-256 fingerprints of device certificates, pinned on first use per `host:port`.
+/// GLKVM devices serve self-signed certificates that the system cannot verify, so the
+/// fingerprint seen on the first successful connection is saved and every later TLS
+/// connection to that address must present the same certificate. Fingerprints are not
+/// secret, so they live in UserDefaults next to the saved device list.
+enum DeviceCertificatePins {
+    private static let defaultsKey = "overlook.certificate_pins.v1"
+
+    private static func key(host: String, port: Int) -> String {
+        "\(host.lowercased()):\(port)"
+    }
+
+    private static func readAll() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: String] ?? [:]
+    }
+
+    static func pin(host: String, port: Int) -> String? {
+        readAll()[key(host: host, port: port)]
+    }
+
+    static func setPin(_ fingerprint: String, host: String, port: Int) {
+        var pins = readAll()
+        pins[key(host: host, port: port)] = fingerprint
+        UserDefaults.standard.set(pins, forKey: defaultsKey)
+    }
+
+    static func removePin(host: String, port: Int) {
+        var pins = readAll()
+        guard pins.removeValue(forKey: key(host: host, port: port)) != nil else { return }
+        UserDefaults.standard.set(pins, forKey: defaultsKey)
+    }
+
+    /// SHA-256 of the leaf certificate's DER encoding, as uppercase hex pairs separated by
+    /// colons (the format of `openssl x509 -noout -fingerprint -sha256`).
+    static func leafFingerprint(of trust: SecTrust) -> String? {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let leaf = chain.first else {
+            return nil
+        }
+        let der = SecCertificateCopyData(leaf) as Data
+        return SHA256.hash(data: der).map { String(format: "%02X", $0) }.joined(separator: ":")
+    }
+
+    /// The first and last four bytes, for comparing fingerprints at a glance.
+    static func shortForm(_ fingerprint: String) -> String {
+        let bytes = fingerprint.split(separator: ":")
+        guard bytes.count > 8 else { return fingerprint }
+        return bytes.prefix(4).joined(separator: ":") + "…" + bytes.suffix(4).joined(separator: ":")
+    }
+}
+
+/// A device presented a different certificate than the one pinned for its address.
+/// The connection was stopped during the TLS handshake, before any request, token or
+/// password was sent.
+struct DeviceCertificateMismatch: Error, CustomStringConvertible {
+    let host: String
+    let port: Int
+    let pinnedFingerprint: String
+    let presentedFingerprint: String
+
+    var hostPort: String {
+        "\(host):\(port)"
+    }
+
+    /// The warning shown in the main window and from the menu bar.
+    var warningMessage: String {
+        """
+        \(hostPort) presented a different certificate than the one Overlook saved for it. Overlook stopped the connection and sent nothing.
+
+        Saved: \(DeviceCertificatePins.shortForm(pinnedFingerprint))
+        Now: \(DeviceCertificatePins.shortForm(presentedFingerprint))
+
+        This is expected after a firmware update, a reset or a regenerated certificate. Otherwise, another device may be answering at this address. Trust the new certificate only if you know why it changed.
+        """
+    }
+
+    var description: String {
+        "The certificate of \(hostPort) has changed (saved \(DeviceCertificatePins.shortForm(pinnedFingerprint)), now \(DeviceCertificatePins.shortForm(presentedFingerprint))). The connection was stopped and nothing was sent."
+    }
+}
+
+/// The one place where Overlook evaluates TLS server trust for device connections:
+/// the HTTP API and login, the `/api/ws` WebSocket (all through `GLKVMClient`),
+/// Janus signaling (`WebRTCManager`) and the discovery probe.
+///
+/// With an endpoint, the device's self-signed certificate is accepted only if its
+/// fingerprint matches the pin for `host:port`. Without a pin yet, the first certificate
+/// this session sees is accepted and kept in `observedFingerprint`, so the caller can pin
+/// it once the connection succeeds; later connections in the same session must match it.
+/// A mismatch cancels the handshake and is kept in `mismatch`.
+///
+/// Without an endpoint (discovery probes, which send no credentials), any certificate is
+/// accepted and nothing is pinned.
+final class DeviceTLSDelegate: NSObject, URLSessionDelegate {
+    private let endpoint: (host: String, port: Int)?
+    private let lock = NSLock()
+    private var _observedFingerprint: String?
+    private var _mismatch: DeviceCertificateMismatch?
+
+    convenience init(host: String, port: Int) {
+        self.init(endpoint: (host, port))
+    }
+
+    /// Accepts any certificate without pinning. Only for requests that carry no credentials.
+    static func unpinned() -> DeviceTLSDelegate {
+        DeviceTLSDelegate(endpoint: nil)
+    }
+
+    private init(endpoint: (host: String, port: Int)?) {
+        self.endpoint = endpoint
+    }
+
+    var observedFingerprint: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _observedFingerprint
+    }
+
+    var mismatch: DeviceCertificateMismatch? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _mismatch
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        guard let endpoint else {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+            return
+        }
+
+        guard let fingerprint = DeviceCertificatePins.leafFingerprint(of: trust),
+              accept(fingerprint, host: endpoint.host, port: endpoint.port) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
+    private func accept(_ fingerprint: String, host: String, port: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let expected = DeviceCertificatePins.pin(host: host, port: port) ?? _observedFingerprint,
+           expected != fingerprint {
+            _mismatch = DeviceCertificateMismatch(host: host, port: port, pinnedFingerprint: expected, presentedFingerprint: fingerprint)
+            NSLog("[Overlook tls] certificate of %@:%d changed: pinned %@, presented %@; connection stopped", host, port, expected, fingerprint)
+            return false
+        }
+
+        if _observedFingerprint == nil {
+            _observedFingerprint = fingerprint
+        }
+        return true
     }
 }

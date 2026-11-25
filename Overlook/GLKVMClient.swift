@@ -238,34 +238,14 @@ final class GLKVMClient {
         case decodingFailed
     }
 
-    private final class SessionDelegate: NSObject, URLSessionDelegate {
-        let allowInsecureTLS: Bool
-
-        init(allowInsecureTLS: Bool) {
-            self.allowInsecureTLS = allowInsecureTLS
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            guard allowInsecureTLS,
-                  challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-                  let trust = challenge.protectionSpace.serverTrust else {
-                completionHandler(.performDefaultHandling, nil)
-                return
-            }
-
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        }
-    }
-
     let baseURL: URL
     var authToken: String?
 
     private let session: URLSession
+    private let trustDelegate: DeviceTLSDelegate?
 
+    /// With `allowInsecureTLS`, the device's self-signed certificate is accepted if it matches
+    /// the pin for `host:port` (see `DeviceTLSDelegate`); otherwise the system's checks apply.
     init(host: String, port: Int = 443, authToken: String? = nil, allowInsecureTLS: Bool = true) throws {
         let scheme = Self.defaultHTTPScheme(for: port)
         guard let url = URL(string: "\(scheme)://\(host):\(port)") else {
@@ -279,7 +259,28 @@ final class GLKVMClient {
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
 
-        self.session = URLSession(configuration: config, delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS), delegateQueue: nil)
+        let trustDelegate = allowInsecureTLS ? DeviceTLSDelegate(host: host, port: port) : nil
+        self.trustDelegate = trustDelegate
+        self.session = URLSession(configuration: config, delegate: trustDelegate, delegateQueue: nil)
+    }
+
+    /// Fingerprint of the certificate this client's connections presented, nil before the
+    /// first TLS connection and for plain HTTP.
+    var serverCertificateFingerprint: String? {
+        trustDelegate?.observedFingerprint
+    }
+
+    /// Runs a request; one the certificate pin stopped throws `DeviceCertificateMismatch`
+    /// instead of a generic cancellation.
+    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request)
+        } catch {
+            if let mismatch = trustDelegate?.mismatch {
+                throw mismatch
+            }
+            throw error
+        }
     }
 
     static func defaultHTTPScheme(for port: Int) -> String {
@@ -339,7 +340,7 @@ final class GLKVMClient {
             request.setValue("auth_token=\(authToken)", forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await perform(request)
         guard let http = response as? HTTPURLResponse else {
             throw ClientError.decodingFailed
         }
@@ -403,7 +404,7 @@ final class GLKVMClient {
         request.httpBody = body
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await perform(request)
         guard let http = response as? HTTPURLResponse else {
             throw ClientError.decodingFailed
         }
@@ -577,7 +578,7 @@ extension GLKVMClient {
             request.setValue("auth_token=\(authToken)", forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await perform(request)
         guard let http = response as? HTTPURLResponse else {
             throw ClientError.decodingFailed
         }
