@@ -16,6 +16,8 @@ struct VideoSurfaceView: View {
     @Binding var selectedText: String
     @Binding var isShowingOCRResult: Bool
 
+    /// A Reconnect is in progress that the WebRTC manager does not know about yet.
+    let isReconnecting: Bool
     let onReconnect: () -> Void
 
     @State private var ocrDragStart: CGPoint?
@@ -113,9 +115,10 @@ struct VideoSurfaceView: View {
                         )
                 }
 
-                if webRTCManager.isConnecting || webRTCManager.isStreamStalled || (webRTCManager.hasEverConnectedToStream && !webRTCManager.isConnected) {
+                let isConnecting = webRTCManager.isConnecting || isReconnecting
+                if isConnecting || webRTCManager.isStreamStalled || (webRTCManager.hasEverConnectedToStream && !webRTCManager.isConnected) || inputManager.isGLKVMWebSocketLost {
                     VStack(spacing: 10) {
-                        Text(webRTCManager.isConnecting ? "Connecting…" : "Connection Lost")
+                        Text(isConnecting ? "Connecting…" : "Connection Lost")
                             .font(.headline)
 
                         if let reason = webRTCManager.lastDisconnectReason, !reason.isEmpty {
@@ -124,7 +127,13 @@ struct VideoSurfaceView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        if let age = webRTCManager.lastVideoFrameAgeSeconds, webRTCManager.isConnecting == false {
+                        if inputManager.isGLKVMWebSocketLost {
+                            Text("Keyboard and mouse connection lost")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if let age = webRTCManager.lastVideoFrameAgeSeconds, isConnecting == false {
                             Text("Last video frame: \(age)s ago")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -134,7 +143,7 @@ struct VideoSurfaceView: View {
                             onReconnect()
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(webRTCManager.isConnecting)
+                        .disabled(isConnecting)
                     }
                     .padding(14)
                     .background(.ultraThinMaterial)
