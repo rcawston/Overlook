@@ -27,10 +27,12 @@ struct ManualConnectSheet: View {
                 Button("Cancel") {
                     isPresented = false
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("Connect") {
                     onConnect()
                     isPresented = false
                 }
+                .keyboardShortcut(.defaultAction)
                 .disabled(hostPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -60,10 +62,12 @@ struct PasswordPromptSheet: View {
                     onCancel()
                     isPresented = false
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("Connect") {
                     onConnect()
                     isPresented = false
                 }
+                .keyboardShortcut(.defaultAction)
                 .disabled(password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
